@@ -39,16 +39,39 @@ def data_para_indice_mes(data: str, meses: List[str]) -> int:
         raise ValueError(f"Data {data} ({mes_procurado}) não está no período de análise. Erro: {e}")
 
 
-def calcular_meses_ativos(mes_inicio: int, duracao: int, meses_ferias: List[int], num_meses: int) -> List[int]:
-    """Calcula meses em que a turma está ativa (excluindo férias)."""
+def calcular_meses_ativos(mes_inicio: int,
+                          duracao: int,
+                          meses_ferias_idx: list,
+                          num_meses_total: int) -> list:
+    """
+    Calcula os meses de calendário em que uma turma está ativa, pulando os meses de férias.
+
+    Args:
+        mes_inicio: O índice do mês em que a turma começa.
+        duracao: A duração da turma em meses letivos.
+        meses_ferias_idx: Uma lista com os índices dos meses de férias.
+        num_meses_total: O número total de meses no horizonte de planejamento.
+
+    Returns:
+        Uma lista com os índices dos meses em que a turma estará efetivamente ativa.
+    """
     meses_ativos = []
-    mes_atual = mes_inicio
-    meses_trabalhados = 0
-    while meses_trabalhados < duracao and mes_atual < num_meses:
-        if mes_atual not in meses_ferias:
-            meses_ativos.append(mes_atual)
-            meses_trabalhados += 1
-        mes_atual += 1
+    meses_letivos_contados = 0
+    mes_calendario_atual = mes_inicio
+
+    # Continua até que tenhamos contado todos os meses da duração do curso
+    # ou até que o calendário acabe.
+    while meses_letivos_contados < duracao and mes_calendario_atual < num_meses_total:
+
+        # Verifica se o mês atual do calendário NÃO é um mês de férias
+        if mes_calendario_atual not in meses_ferias_idx:
+            # Se não for férias, é um mês ativo para a turma.
+            meses_ativos.append(mes_calendario_atual)
+            meses_letivos_contados += 1
+
+        # Avança para o próximo mês do calendário, independentemente de ser férias ou não.
+        mes_calendario_atual += 1
+
     return meses_ativos
 
 

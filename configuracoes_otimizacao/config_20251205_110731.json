@@ -14,7 +14,7 @@
     "timeout_segundos": 180,
     "peso_instrutores": 10000,
     "peso_spread": 1,
-    "pico_maximo_turmas": 100
+    "pico_maximo_turmas": 150
   },
   "projetos": [
     {

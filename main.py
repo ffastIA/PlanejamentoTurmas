@@ -98,13 +98,24 @@ def main():
             parametros
         )
 
+        # &lt;&lt;&lt; CORREÇÃO: VERIFICAR A FALHA IMEDIATAMENTE APÓS A CHAMADA >>>
+        if not resultados_estagio1:
+            print("\n" + "="*80)
+            print("[ERRO CRÍTICO] O Estágio 1 (Otimização de Cronograma) FALHOU.")
+            print("O otimizador não conseguiu encontrar uma solução viável com as restrições atuais.")
+            print("\nCAUSAS PROVÁVEIS:")
+            print("  1. JANELA DE PROJETO MUITO CURTA: A duração de um projeto, somada aos meses de férias que precisam ser 'pulados', pode exceder a data de término permitida para esse projeto.")
+            print("  2. MUITAS TURMAS, POUCO TEMPO: A quantidade total de turmas pode ser muito alta para ser alocada nos meses 'úteis' disponíveis.")
+            print("  3. PICO MÁXIMO MUITO RESTRITIVO: O parâmetro 'pico_maximo_turmas' pode ser muito baixo para acomodar a concentração de turmas fora dos meses de férias.")
+            print("\nSUGESTÕES:")
+            print("  - Revise as datas de início/término e a duração dos projetos na sua configuração.")
+            print("  - Considere flexibilizar (aumentar) o parâmetro 'pico_maximo_turmas'.")
+            print("="*80)
+            sys.exit(1) # Encerra o programa de forma controlada
+
+        # Se chegou aqui, a otimização foi um sucesso. Agora podemos adicionar os dados.
         resultados_estagio1['periodo'] = f"{dt_min.strftime('%d/%m/%Y')} a {dt_max.strftime('%d/%m/%Y')}"
         resultados_estagio1['meses_total'] = len(meses)
-
-
-        if not resultados_estagio1:
-            print("\n[ERRO] Falha no Estágio 1. Verifique as restrições do projeto.")
-            sys.exit(1)
 
         print("\n✓ Estágio 1 concluído com sucesso!")
 
@@ -173,7 +184,7 @@ def main():
         try:
             graficos['projeto_mes'] = plotting.gerar_grafico_turmas_projeto_mes(
                 resultados_estagio2['turmas'],
-                projetos_modelo,  # <-- CORRIGIDO: Passando projetos
+                projetos_modelo,
                 meses,
                 meses_ferias_idx
             )
@@ -203,7 +214,7 @@ def main():
         try:
             graficos['prog_rob'], serie_temporal_df = plotting.gerar_grafico_demanda_prog_rob(
                 resultados_estagio2['turmas'],
-                projetos_modelo,  # <-- CORRIGIDO: Passando projetos
+                projetos_modelo,
                 meses,
                 meses_ferias_idx
             )
@@ -218,7 +229,7 @@ def main():
             plotting.plotar_conclusoes_por_mes(
                 resultados_estagio2['turmas'],
                 projetos_modelo,
-                dt_min,  # <-- CORRIGIDO: Passando dt_min
+                dt_min,
                 len(meses),
                 grafico_conclusoes
             )
@@ -237,7 +248,8 @@ def main():
             serie_temporal_df=serie_temporal_df,
             df_consolidada_instrutor=df_consolidada_instrutor,
             contagem_instrutores_hab=contagem_instrutores_hab,
-            distribuicao_por_projeto=distribuicao_por_projeto
+            distribuicao_por_projeto=distribuicao_por_projeto,
+            pico_maximo_limite=parametros.pico_maximo_turmas  # <<< ALTERAÇÃO >>>
         )
 
         print("\n4. Limpando arquivos temporários...")
