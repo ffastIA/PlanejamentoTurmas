@@ -3,10 +3,44 @@
 from collections import defaultdict
 from typing import List, Dict, Optional
 from ortools.sat.python import cp_model
+import time  # <<< ALTERAÇÃO >>>
+import sys  # <<< ALTERAÇÃO >>>
 
 # Import relativo para acessar modelos de dados e utils
 from ..data_models import Projeto, ParametrosOtimizacao, Turma, Instrutor
 from ..utils import calcular_meses_ativos
+
+
+# <<< ALTERAÇÃO: INÍCIO DA DEFINIÇÃO DO CALLBACK >>>
+class Stage2Callback(cp_model.CpSolverSolutionCallback):
+    """Callback para monitorar o progresso da alocação de instrutores."""
+
+    def __init__(self, total_instrutores_var, spread_var):
+        cp_model.CpSolverSolutionCallback.__init__(self)
+        self.__total_instrutores = total_instrutores_var
+        self.__spread = spread_var
+        self.__solution_count = 0
+        self.__start_time = time.time()
+        print("\n[Callback] Monitorando o progresso da otimização do Estágio 2...")
+
+    def on_solution_callback(self):
+        """Chamado a cada nova solução encontrada."""
+        current_time = time.time()
+        instrutores = self.Value(self.__total_instrutores)
+        spread = self.Value(self.__spread)
+
+        self.__solution_count += 1
+
+        # O 'flush=True' força a impressão imediata no terminal, evitando problemas de buffer.
+        print(f"\n  >>> NOVA SOLUÇÃO #{self.__solution_count} ({current_time - self.__start_time:.2f}s) | "
+              f"Instrutores: {instrutores} | "
+              f"Spread: {spread} <<<\n", flush=True)
+
+    def solution_count(self):
+        return self.__solution_count
+
+
+# <<< ALTERAÇÃO: FIM DA DEFINIÇÃO DO CALLBACK >>>
 
 
 def otimizar_atribuicao_e_carga(cronograma_flexivel: Dict,
@@ -22,7 +56,7 @@ def otimizar_atribuicao_e_carga(cronograma_flexivel: Dict,
     print("ESTÁGIO 2: Alocação de Instrutores")
     print("=" * 80)
     print(f"Capacidade máxima por instrutor: {parametros.capacidade_max_instrutor} turmas/mês")
-    print(f"Spread máximo configurado: {parametros.spread_maximo} turmas\n")
+    print(f"Spread máximo configurado: {parametros.spread_maximo}\n")
 
     # 1. Criação de Turmas a partir do cronograma do Estágio 1
     all_turmas, turma_counter = [], 0
@@ -51,26 +85,21 @@ def otimizar_atribuicao_e_carga(cronograma_flexivel: Dict,
     # 3. Construção do Modelo de Otimização
     model = cp_model.CpModel()
     num_meses = len(meses)
-
     turmas_por_habilidade = defaultdict(list)
     for t in all_turmas: turmas_por_habilidade[t.habilidade].append(t)
-
     instrutores_por_habilidade = defaultdict(list)
     for i in all_instrutores: instrutores_por_habilidade[i.habilidade].append(i)
 
-    # Variáveis de Decisão: assign[(turma, instrutor)]
     assign = {}
     for habilidade, turmas in turmas_por_habilidade.items():
         for t in turmas:
             for i in instrutores_por_habilidade.get(habilidade, []):
                 assign[(t.id, i.id)] = model.NewBoolVar(f'assign_{t.id[:15]}_{i.id}')
 
-    # Restrição: Cada turma é alocada a exatamente um instrutor
     for t_list in turmas_por_habilidade.values():
         for t in t_list:
             model.AddExactlyOne(assign[(t.id, i.id)] for i in instrutores_por_habilidade[t.habilidade])
 
-    # Restrição: Capacidade mensal do instrutor não pode ser excedida
     for i in all_instrutores:
         for m in range(num_meses):
             carga_mensal = []
@@ -81,7 +110,6 @@ def otimizar_atribuicao_e_carga(cronograma_flexivel: Dict,
             if carga_mensal:
                 model.Add(sum(carga_mensal) <= i.capacidade)
 
-    # Variáveis de Carga e Spread
     cargas_totais, instrutores_usados = [], []
     for i in all_instrutores:
         usado = model.NewBoolVar(f'usado_{i.id}')
@@ -100,36 +128,39 @@ def otimizar_atribuicao_e_carga(cronograma_flexivel: Dict,
     if instrutores_usados:
         model.Add(total_instrutores == sum(instrutores_usados))
 
-    # Modelagem do Spread para o Otimizador
     spread_var = model.NewIntVar(0, 300, 'spread_obj')
     if cargas_totais:
         max_carga = model.NewIntVar(0, 300, 'max_carga')
         min_carga_usada = model.NewIntVar(0, 300, 'min_carga_usada')
         model.AddMaxEquality(max_carga, cargas_totais)
-
-        # Truque de modelagem: se um instrutor não é usado, sua carga é tratada como um valor alto (max_carga)
-        # para que ele não seja escolhido como o mínimo.
         cargas_ajustadas = []
         for i, carga in enumerate(cargas_totais):
             carga_ajustada = model.NewIntVar(0, 300, f'carga_ajustada_{i}')
             model.Add(carga_ajustada == carga).OnlyEnforceIf(instrutores_usados[i])
             model.Add(carga_ajustada == max_carga).OnlyEnforceIf(instrutores_usados[i].Not())
             cargas_ajustadas.append(carga_ajustada)
-
         model.AddMinEquality(min_carga_usada, cargas_ajustadas)
         model.Add(spread_var == max_carga - min_carga_usada)
         model.Add(spread_var <= parametros.spread_maximo)
     else:
         model.Add(spread_var == 0)
 
-    # Função Objetivo: Minimizar instrutores, depois o spread
     model.Minimize(total_instrutores * 10000 + spread_var)
 
     # 4. Resolução do Modelo
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = float(parametros.timeout_segundos)
-    print("Resolvendo alocação...")
-    status = solver.Solve(model)
+
+    # <<< ALTERAÇÃO: ATIVAR O LOG PADRÃO PARA SEMPRE TER SAÍDA >>>
+    solver.parameters.log_search_progress = True
+
+    print("Resolvendo alocação... (com log de progresso ativado)")
+
+    # <<< ALTERAÇÃO: INSTANCIAR E PASSAR O CALLBACK >>>
+    callback = Stage2Callback(total_instrutores, spread_var)
+    status = solver.Solve(model, callback)
+
+    # ... (o resto do código permanece o mesmo) ...
 
     if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         print(f"\n[✓] SUCESSO! Status: {solver.StatusName(status)}")
@@ -141,7 +172,6 @@ def otimizar_atribuicao_e_carga(cronograma_flexivel: Dict,
                     atribuicoes.append({'turma': t, 'instrutor': i})
                     break
 
-        # Cálculo do spread REAL a partir dos resultados
         carga_por_instrutor = defaultdict(int)
         for atr in atribuicoes:
             carga_por_instrutor[atr['instrutor'].id] += 1

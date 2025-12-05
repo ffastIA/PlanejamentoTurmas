@@ -9,6 +9,7 @@ from fpdf import FPDF
 from fpdf.enums import XPos, YPos
 import pandas as pd
 from typing import List, Dict
+from datetime import datetime
 
 # Import relativo
 from ..data_models import ConfiguracaoProjeto
@@ -44,6 +45,10 @@ class PDF(FPDF):
         self.set_font(self.font_family, '', 10)
         self.cell(0, 8, 'Planejamento de Alocação de Instrutores',
                   new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
+        # Inserção do Timestamp
+        self.set_font(self.font_family, '', 8)
+        timestamp = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        self.cell(0, 8, f'Gerado em: {timestamp}', new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
         self.ln(5)
 
     def footer(self):

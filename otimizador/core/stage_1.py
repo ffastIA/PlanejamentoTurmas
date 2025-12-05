@@ -3,10 +3,44 @@
 from collections import defaultdict
 from typing import List, Dict, Optional
 from ortools.sat.python import cp_model
+import time  # <<< ALTERAÇÃO >>>
 
 # Import relativo para acessar modelos de dados e utils
 from ..data_models import Projeto, ParametrosOtimizacao
-from ..utils import calcular_meses_ativos  # GARANTA QUE ESTA IMPORTAÇÃO ESTEJA AQUI
+from ..utils import calcular_meses_ativos
+
+
+# <<< ALTERAÇÃO: INÍCIO DA DEFINIÇÃO DO CALLBACK >>>
+class Stage1Callback(cp_model.CpSolverSolutionCallback):
+    """Callback para monitorar o progresso da otimização do Estágio 1."""
+
+    def __init__(self, pico_prog_var, pico_rob_var):
+        cp_model.CpSolverSolutionCallback.__init__(self)
+        self.__pico_prog = pico_prog_var
+        self.__pico_rob = pico_rob_var
+        self.__solution_count = 0
+        self.__start_time = time.time()
+        print("\n[Callback] Monitorando o progresso da otimização do Estágio 1...")
+
+    def on_solution_callback(self):
+        """Chamado pelo solver a cada nova solução encontrada."""
+        current_time = time.time()
+        pico_prog_val = self.Value(self.__pico_prog)
+        pico_rob_val = self.Value(self.__pico_rob)
+
+        self.__solution_count += 1
+
+        print(f"  > Sol. #{self.__solution_count} "
+              f"({current_time - self.__start_time:.2f}s) | "
+              f"Pico PROG: {pico_prog_val}, "
+              f"Pico ROB: {pico_rob_val} | "
+              f"Objetivo: {self.ObjectiveValue():.0f}")
+
+    def solution_count(self):
+        return self.__solution_count
+
+
+# <<< ALTERAÇÃO: FIM DA DEFINIÇÃO DO CALLBACK >>>
 
 
 def otimizar_curva_demanda(projetos_flexiveis: List[Projeto],
@@ -26,7 +60,6 @@ def otimizar_curva_demanda(projetos_flexiveis: List[Projeto],
             if proj.rob > 0: inicio_vars_rob[(proj.nome, m)] = model.NewIntVar(0, proj.rob, f'r_{proj.nome}_{m}')
 
     # --- Restrição 1: Total de Turmas por Projeto ---
-    # Garante que o número total de turmas iniciadas seja igual ao necessário.
     for proj in projetos_flexiveis:
         if proj.prog > 0: model.Add(sum(
             inicio_vars_prog.get((proj.nome, m), 0) for m in range(proj.inicio_min, proj.inicio_max + 1)) == proj.prog)
@@ -34,37 +67,28 @@ def otimizar_curva_demanda(projetos_flexiveis: List[Projeto],
             inicio_vars_rob.get((proj.nome, m), 0) for m in range(proj.inicio_min, proj.inicio_max + 1)) == proj.rob)
 
     # --- Restrição 2: Proibir INÍCIO de turmas nas férias ---
-    # Esta é uma das regras corrigidas e fundamentais.
     for mes_ferias in meses_ferias_idx:
         for proj in projetos_flexiveis:
-            # Proíbe o início de turmas de programação no mês de férias
             if proj.prog > 0 and (proj.nome, mes_ferias) in inicio_vars_prog:
                 model.Add(inicio_vars_prog[(proj.nome, mes_ferias)] == 0)
-
-            # Proíbe o início de turmas de robótica no mês de férias
             if proj.rob > 0 and (proj.nome, mes_ferias) in inicio_vars_rob:
                 model.Add(inicio_vars_rob[(proj.nome, mes_ferias)] == 0)
 
     # --- Restrição 3: Cálculo da Demanda usando a nova lógica de "pulo" ---
     demanda_total_prog, demanda_total_rob = {}, {}
     for m in range(num_meses):
-        # Para cada mês do calendário 'm', verificamos quais turmas estão ativas.
-        # A lógica agora está encapsulada e corrigida em `calcular_meses_ativos`.
-
         demanda_m_prog_list = [
             inicio_vars_prog[(p.nome, m_i)]
             for p in projetos_flexiveis if p.prog > 0
             for m_i in range(p.inicio_min, p.inicio_max + 1)
             if m in calcular_meses_ativos(m_i, p.duracao, meses_ferias_idx, num_meses)
         ]
-
         demanda_m_rob_list = [
             inicio_vars_rob[(p.nome, m_i)]
             for p in projetos_flexiveis if p.rob > 0
             for m_i in range(p.inicio_min, p.inicio_max + 1)
             if m in calcular_meses_ativos(m_i, p.duracao, meses_ferias_idx, num_meses)
         ]
-
         demanda_total_prog[m] = model.NewIntVar(0, 300, f'dt_prog_{m}')
         demanda_total_rob[m] = model.NewIntVar(0, 300, f'dt_rob_{m}')
         model.Add(demanda_total_prog[m] == sum(demanda_m_prog_list))
@@ -73,23 +97,21 @@ def otimizar_curva_demanda(projetos_flexiveis: List[Projeto],
     # --- Definição do Objetivo e Resolução ---
     pico_prog = model.NewIntVar(0, 300, 'pico_prog')
     pico_rob = model.NewIntVar(0, 300, 'pico_rob')
-
-    # Restrição de pico máximo global de turmas
     pico_consolidado_total = parametros.pico_maximo_turmas
     for m in range(num_meses):
         model.Add(demanda_total_prog[m] + demanda_total_rob[m] <= pico_consolidado_total)
 
     model.AddMaxEquality(pico_prog, list(demanda_total_prog.values()))
     model.AddMaxEquality(pico_rob, list(demanda_total_rob.values()))
-
-    # Minimiza a soma dos picos de cada habilidade.
     model.Minimize(pico_prog + pico_rob)
 
     # --- Resolução do Modelo ---
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = float(parametros.timeout_segundos)
-    print("Resolvendo modelo...")
-    status = solver.Solve(model)
+
+    # <<< ALTERAÇÃO: INSTANCIAR E USAR O CALLBACK >>>
+    callback = Stage1Callback(pico_prog, pico_rob)
+    status = solver.Solve(model, callback)
 
     if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         print(f"\n[✓] SUCESSO! Status: {solver.StatusName(status)}")
@@ -100,10 +122,11 @@ def otimizar_curva_demanda(projetos_flexiveis: List[Projeto],
                     for m in range(proj.inicio_min, proj.inicio_max + 1):
                         num_turmas = solver.Value(vars_dict.get((proj.nome, m), 0))
                         if num_turmas > 0:
-                            cronograma_flexivel[proj.nome].append({'mes_inicio': m, 'num_turmas': num_turmas, 'habilidade': hab_nome})
+                            cronograma_flexivel[proj.nome].append(
+                                {'mes_inicio': m, 'num_turmas': num_turmas, 'habilidade': hab_nome})
         return {
             "cronograma": dict(cronograma_flexivel),
-            "pico_max": solver.Value(pico_prog) + solver.Value(pico_rob), # Corrigido para refletir o pico real
+            "pico_max": solver.Value(pico_prog) + solver.Value(pico_rob),
             "pico_prog": solver.Value(pico_prog),
             "pico_rob": solver.Value(pico_rob),
             "meses_ferias": meses_ferias_idx,
