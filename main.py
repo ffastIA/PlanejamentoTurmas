@@ -98,7 +98,6 @@ def main():
             parametros
         )
 
-        # &lt;&lt;&lt; CORREÇÃO: VERIFICAR A FALHA IMEDIATAMENTE APÓS A CHAMADA >>>
         if not resultados_estagio1:
             print("\n" + "="*80)
             print("[ERRO CRÍTICO] O Estágio 1 (Otimização de Cronograma) FALHOU.")
@@ -111,9 +110,8 @@ def main():
             print("  - Revise as datas de início/término e a duração dos projetos na sua configuração.")
             print("  - Considere flexibilizar (aumentar) o parâmetro 'pico_maximo_turmas'.")
             print("="*80)
-            sys.exit(1) # Encerra o programa de forma controlada
+            sys.exit(1)
 
-        # Se chegou aqui, a otimização foi um sucesso. Agora podemos adicionar os dados.
         resultados_estagio1['periodo'] = f"{dt_min.strftime('%d/%m/%Y')} a {dt_max.strftime('%d/%m/%Y')}"
         resultados_estagio1['meses_total'] = len(meses)
 
@@ -224,20 +222,20 @@ def main():
             graficos['prog_rob'] = None
             serie_temporal_df = pd.DataFrame()
 
+        # --- INÍCIO DA ALTERAÇÃO CORRIGIDA ---
         try:
-            grafico_conclusoes = str(output_dir / "grafico_conclusoes_mes.png")
-            plotting.plotar_conclusoes_por_mes(
+            # A chamada agora usa os argumentos corretos e a função retorna o caminho diretamente.
+            graficos['conclusoes'] = plotting.plotar_conclusoes_por_mes(
                 resultados_estagio2['turmas'],
                 projetos_modelo,
-                dt_min,
-                len(meses),
-                grafico_conclusoes
+                meses,
+                meses_ferias_idx
             )
-            graficos['conclusoes'] = grafico_conclusoes
             print("  ✓ Gráfico conclusões/mês")
         except Exception as e:
             print(f"  ⚠ Erro no gráfico conclusões/mês: {e}")
             graficos['conclusoes'] = None
+        # --- FIM DA ALTERAÇÃO CORRIGIDA ---
 
         print("\n3. Gerando relatório PDF...")
         pdf_generator.gerar_relatorio_pdf(
@@ -249,7 +247,7 @@ def main():
             df_consolidada_instrutor=df_consolidada_instrutor,
             contagem_instrutores_hab=contagem_instrutores_hab,
             distribuicao_por_projeto=distribuicao_por_projeto,
-            pico_maximo_limite=parametros.pico_maximo_turmas  # <<< ALTERAÇÃO >>>
+            pico_maximo_limite=parametros.pico_maximo_turmas
         )
 
         print("\n4. Limpando arquivos temporários...")
