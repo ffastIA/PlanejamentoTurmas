@@ -1,11 +1,9 @@
-# ARQUIVO: otimizador/io/user_input.py
-
 import sys
 from datetime import datetime
 from typing import List, Optional
 
 # Import relativo para acessar os modelos de dados do mesmo pacote
-from ..data_models import ParametrosOtimizacao, ConfiguracaoProjeto
+from ..data_models import ParametrosOtimizacao, ConfiguracaoProjeto, ParametrosFinanceiros
 
 
 def obter_parametros_usuario() -> ParametrosOtimizacao:
@@ -41,7 +39,6 @@ def obter_parametros_usuario() -> ParametrosOtimizacao:
             valor_padrao=1, minimo=0, maximo=10000, nome_parametro="Peso Spread"
         )
 
-        # <<< ALTERAÇÃO: Valor padrão corrigido para 100 >>>
         pico_maximo = _obter_int_usuario(
             prompt="Pico máximo de turmas simultâneas [padrão: 100]: ",
             valor_padrao=100, minimo=1, maximo=500, nome_parametro="Pico Máximo"
@@ -63,6 +60,34 @@ def obter_parametros_usuario() -> ParametrosOtimizacao:
     except Exception as e:
         print(f"\n[ERRO] Falha ao obter parâmetros: {e}")
         sys.exit(1)
+
+
+def obter_parametros_financeiros() -> ParametrosFinanceiros:
+    """Solicita parâmetros financeiros ao usuário via CLI."""
+    print("\n" + "=" * 80)
+    print("CONFIGURAÇÃO DO MÓDULO FINANCEIRO")
+    print("=" * 80)
+    print("\nInforme os dados para cálculo do fluxo de caixa:")
+
+    try:
+        custo_mensal = _obter_float_usuario(
+            prompt="Custo mensal médio por instrutor (R$) [padrão: 5000.00]: ",
+            valor_padrao=5000.00,
+            minimo=0.0,
+            maximo=100000.0,
+            nome_parametro="Custo Mensal"
+        )
+
+        params_fin = ParametrosFinanceiros(custo_mensal_instrutor=custo_mensal)
+        print(f"\n[✓] Parâmetros financeiros definidos: Custo R$ {params_fin.custo_mensal_instrutor:.2f}/mês")
+        return params_fin
+
+    except KeyboardInterrupt:
+        print("\n\n[!] Operação cancelada. Usando valores padrão (R$ 0,00).")
+        return ParametrosFinanceiros()
+    except Exception as e:
+        print(f"\n[ERRO] Falha ao obter dados financeiros: {e}")
+        return ParametrosFinanceiros()
 
 
 def obter_projetos_usuario() -> List[ConfiguracaoProjeto]:
@@ -321,7 +346,7 @@ def exibir_resumo_parametros(params: ParametrosOtimizacao):
     print(f"  • Timeout do Solver: {params.timeout_segundos} segundos")
     print(f"  • Meses de Férias: {', '.join(params.meses_ferias)}")
 
-    # <<< ALTERAÇÃO: Adicionando a exibição dos novos parâmetros >>>
+    # Adicionando a exibição dos novos parâmetros
     print(f"  • Peso Minimização Instrutores: {params.peso_instrutores}")
     print(f"  • Peso Spread de Carga: {params.peso_spread}")
     print(f"  • Pico Máximo de Turmas: {params.pico_maximo_turmas}")

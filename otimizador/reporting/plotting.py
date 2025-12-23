@@ -1,306 +1,259 @@
-# ARQUIVO: otimizador/reporting/plotting.py
-"""
-Módulo responsável pela geração de gráficos e visualizações.
-Versão 4.0 - Lógica de Férias Sincronizada
-"""
-
-import os
-from collections import defaultdict
-from typing import List, Dict, Tuple
-import calendar
-
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-import numpy as np
 import pandas as pd
-from pathlib import Path
-
-# --- Importações Corrigidas ---
-from ..data_models import Turma, Projeto
-# Importa a função central que contém a lógica de "pular" as férias
+import numpy as np
+from typing import List, Dict, Tuple, Optional
 from ..utils import calcular_meses_ativos
+from ..data_models import Projeto, Turma, ParametrosFinanceiros
 
-def _gerar_grafico_vazio(titulo: str, caminho: str = None) -> str:
-    """
-    Gera um gráfico vazio com mensagem de ausência de dados.
-    """
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.text(0.5, 0.5, 'Sem dados disponíveis para este gráfico', ha='center', va='center', fontsize=14, color='gray')
-    ax.set_title(titulo, fontsize=14, fontweight='bold')
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
-    ax.axis('off')
-
-    output_dir = Path("resultados_otimizacao")
-    output_dir.mkdir(exist_ok=True)
-
-    if not caminho:
-        # Garante um nome de arquivo válido
-        nome_arquivo = f"grafico_vazio_{titulo.replace(' ', '_').replace('/', '').lower()}.png"
-        caminho = str(output_dir / nome_arquivo)
-
-    plt.savefig(caminho, dpi=150, bbox_inches='tight')
-    plt.close()
-    return caminho
+# Configuração de estilo para gráficos mais profissionais
+plt.style.use('ggplot')
 
 
-def gerar_grafico_turmas_projeto_mes(turmas: List[Turma], projetos: List[Projeto], meses: List[str],
-                                     meses_ferias: List[int]) -> str:
-    """
-    CORRIGIDO: Gera gráfico de turmas por projeto, respeitando a lógica de pular férias.
-    """
-    print("  Calculando gráfico de turmas por projeto/mês (Lógica de Férias Sincronizada)...")
-    dados = []
-    num_meses_total = len(meses)
+def gerar_grafico_turmas_projeto_mes(turmas: List[Turma], projetos: List[Projeto],
+                                     meses: List[str], meses_ferias_idx: List[int]) -> str:
+    """Gera gráfico de barras empilhadas: Turmas por Projeto por Mês."""
+    num_meses = len(meses)
+    dados_projeto = {p.nome: np.zeros(num_meses) for p in projetos}
 
-    for turma in turmas:
-        projeto_base_nome = turma.projeto.split('_Onda')[0]
+    for t in turmas:
+        # Usa a função utilitária para considerar o "pulo" das férias
+        meses_ativos = calcular_meses_ativos(t.mes_inicio, t.duracao, meses_ferias_idx, num_meses)
+        for m in meses_ativos:
+            # Remove sufixos de onda para agrupar no gráfico (ex: DD2_Onda1 -> DD2)
+            nome_proj_base = t.projeto.split('_Onda')[0]
+            if nome_proj_base in dados_projeto:
+                dados_projeto[nome_proj_base][m] += 1
 
-        # --- Lógica Corrigida ---
-        # Usa a função central para obter os meses de atividade real
-        meses_ativos_reais = calcular_meses_ativos(turma.mes_inicio, turma.duracao, meses_ferias, num_meses_total)
+    fig, ax = plt.subplots(figsize=(14, 7))
+    bottom = np.zeros(num_meses)
 
-        for mes_idx in meses_ativos_reais:
-            dados.append({
-                'Projeto': projeto_base_nome,
-                'Mes': meses[mes_idx],
-            })
+    # Cores distintas para projetos
+    cores = plt.cm.tab20(np.linspace(0, 1, len(projetos)))
 
-    if not dados:
-        return _gerar_grafico_vazio("Turmas por Projeto/Mês")
+    for (nome_proj, valores), cor in zip(dados_projeto.items(), cores):
+        ax.bar(meses, valores, bottom=bottom, label=nome_proj, color=cor, alpha=0.8)
+        bottom += valores
 
-    df = pd.DataFrame(dados)
-    df['Mes'] = pd.Categorical(df['Mes'], categories=meses, ordered=True)
-    pivot = df.groupby(['Projeto', 'Mes'], observed=False).size().unstack(fill_value=0)
-
-    # Garante que todos os meses do calendário apareçam no gráfico na ordem correta
-    pivot = pivot.reindex(columns=meses, fill_value=0)
-
-    fig, ax = plt.subplots(figsize=(16, 8))
-    pivot.T.plot(kind='bar', stacked=True, ax=ax, colormap='tab20', width=0.8)
-
-    ax.set_xlabel('Mês', fontsize=12, fontweight='bold')
-    ax.set_ylabel('Número de Turmas Ativas', fontsize=12, fontweight='bold')
-    ax.set_title('Turmas Ativas por Projeto ao Longo do Tempo', fontsize=14, fontweight='bold')
-    ax.legend(title='Projetos', bbox_to_anchor=(1.05, 1), loc='upper left')
-
-    # Destaca as colunas dos meses de férias para verificação visual
-    for mes_idx in meses_ferias:
-        ax.get_xticklabels()[mes_idx].set_color("red")
-        ax.get_xticklabels()[mes_idx].set_fontweight('bold')
-
+    ax.set_title('Evolução da Quantidade de Turmas Ativas por Projeto', fontsize=14)
+    ax.set_ylabel('Quantidade de Turmas')
+    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.xticks(rotation=45, ha='right')
     plt.tight_layout()
 
-    output_dir = Path("resultados_otimizacao")
-    output_dir.mkdir(exist_ok=True)
-    caminho = str(output_dir / "grafico_turmas_projeto_mes.png")
-
+    caminho = "resultados_otimizacao/grafico_turmas_projeto.png"
     plt.savefig(caminho, dpi=300, bbox_inches='tight')
     plt.close()
     return caminho
 
 
-def gerar_grafico_demanda_prog_rob(turmas: List[Turma], projetos: List[Projeto], meses: List[str],
-                                   meses_ferias_idx: List[int]) -> Tuple[str, pd.DataFrame]:
-    """
-    CORRIGIDO: Gera gráfico da demanda mensal por habilidade, respeitando a lógica de pular férias.
-    """
-    print("  Calculando demanda mensal por habilidade (Lógica de Férias Sincronizada)...")
-    output_dir = Path("resultados_otimizacao")
-    output_dir.mkdir(exist_ok=True)
-    caminho_grafico = str(output_dir / "grafico_demanda_prog_rob.png")
-
-    num_meses_total = len(meses)
-    demanda = {"Mês": meses, "PROG": [0] * num_meses_total, "ROB": [0] * num_meses_total}
-
-    for turma in turmas:
-        tipo = turma.habilidade
-
-        # --- Lógica Corrigida ---
-        # Usa a função central para obter os meses de atividade real
-        meses_ativos_reais = calcular_meses_ativos(turma.mes_inicio, turma.duracao, meses_ferias_idx, num_meses_total)
-
-        # Adiciona demanda apenas nos meses de atividade real
-        for mes_idx in meses_ativos_reais:
-            if tipo == 'PROG':
-                demanda["PROG"][mes_idx] += 1
-            else:
-                demanda["ROB"][mes_idx] += 1
-
-    df = pd.DataFrame(demanda)
-    df.rename(columns={'PROG': 'Demanda PROG', 'ROB': 'Demanda ROB'}, inplace=True)
-
-    # O código de plotagem a partir daqui permanece o mesmo, mas agora opera sobre os dados corretos
-    plt.style.use('seaborn-v0_8-whitegrid')
-    fig, ax = plt.subplots(figsize=(16, 8))
-    ax.plot(df['Mês'], df['Demanda PROG'], marker='o', linestyle='-', label='Demanda PROG', color='royalblue')
-    ax.plot(df['Mês'], df['Demanda ROB'], marker='s', linestyle='--', label='Demanda ROB', color='firebrick')
-
-    for i, txt in enumerate(df['Demanda PROG']):
-        if txt > 0: ax.annotate(txt, (df['Mês'][i], df['Demanda PROG'][i]), textcoords="offset points", xytext=(0, 5),
-                                ha='center', fontsize=8)
-    for i, txt in enumerate(df['Demanda ROB']):
-        if txt > 0: ax.annotate(txt, (df['Mês'][i], df['Demanda ROB'][i]), textcoords="offset points", xytext=(0, 5),
-                                ha='center', fontsize=8)
-
-    for mes_idx in meses_ferias_idx:
-        ax.axvspan(mes_idx - 0.5, mes_idx + 0.5, color='gold', alpha=0.3, zorder=0,
-                   label='Férias' if mes_idx == meses_ferias_idx[0] else "")
-
-    ax.set_title('Demanda Mensal de Turmas por Habilidade (PROG vs ROB)', fontsize=16, pad=20)
-    ax.set_xlabel('Mês', fontsize=12)
-    ax.set_ylabel('Número de Turmas Ativas', fontsize=12)
-    ax.tick_params(axis='x', rotation=45, labelsize=9)
-    ax.legend()
-    ax.grid(True, which='both', linestyle='--', linewidth=0.5)
-    plt.tight_layout()
-    fig.savefig(caminho_grafico)
-    plt.close(fig)
-    print(f"    - Gráfico salvo em: {caminho_grafico}")
-
-    return caminho_grafico, df
-
 def gerar_grafico_turmas_instrutor_tipologia_projeto(atribuicoes: List[Dict]) -> str:
-    """
-    Gera gráfico de turmas por instrutor e projeto. (Lógica original mantida)
-    """
-    if not atribuicoes:
-        return _gerar_grafico_vazio("Turmas por Instrutor/Projeto")
+    """Gera gráfico de barras: Turmas por Instrutor (dividido por projeto)."""
+    # Organizar dados
+    dados = {}  # {instrutor_id: {proj1: count, proj2: count}}
+    todos_projetos = set()
 
-    contagem = defaultdict(lambda: defaultdict(int))
     for atr in atribuicoes:
-        instrutor_id = atr['instrutor'].id
-        projeto = atr['turma'].projeto.split('_Onda')[0]
-        contagem[instrutor_id][projeto] += 1
+        inst_id = atr['instrutor'].id
+        proj_nome = atr['turma'].projeto.split('_Onda')[0]
+        todos_projetos.add(proj_nome)
 
-    # Ordena os instrutores para uma visualização consistente
-    df = pd.DataFrame(contagem).T.fillna(0).sort_index()
-    fig, ax = plt.subplots(figsize=(14, max(8, len(df) * 0.4)))
-    df.plot(kind='barh', stacked=True, ax=ax, colormap='tab20b')
+        if inst_id not in dados: dados[inst_id] = {}
+        dados[inst_id][proj_nome] = dados[inst_id].get(proj_nome, 0) + 1
 
-    ax.set_xlabel('Número de Turmas', fontsize=12, fontweight='bold')
-    ax.set_ylabel('Instrutor', fontsize=12, fontweight='bold')
-    ax.set_title('Distribuição de Turmas por Instrutor e Projeto', fontsize=14, fontweight='bold')
-    ax.legend(title='Projetos', bbox_to_anchor=(1.05, 1), loc='upper left')
+    # Ordenar instrutores por ID numérico
+    instrutores_ordenados = sorted(dados.keys(), key=lambda x: (x.split('_')[0], int(x.split('_')[1])))
+    projetos_ordenados = sorted(list(todos_projetos))
 
+    fig, ax = plt.subplots(figsize=(15, 8))
+    bottom = np.zeros(len(instrutores_ordenados))
+
+    for proj in projetos_ordenados:
+        valores = [dados[i].get(proj, 0) for i in instrutores_ordenados]
+        ax.bar(instrutores_ordenados, valores, bottom=bottom, label=proj)
+        bottom += np.array(valores)
+
+    ax.set_title('Distribuição de Turmas por Instrutor e Projeto', fontsize=14)
+    ax.set_ylabel('Total de Turmas Atribuídas')
+    plt.xticks(rotation=90)
+    ax.legend()
     plt.tight_layout()
-    output_dir = Path("resultados_otimizacao")
-    output_dir.mkdir(exist_ok=True)
-    caminho = str(output_dir / "grafico_turmas_instrutor_projeto.png")
+
+    caminho = "resultados_otimizacao/grafico_instrutor_projeto.png"
     plt.savefig(caminho, dpi=300, bbox_inches='tight')
     plt.close()
     return caminho
 
 
 def gerar_grafico_carga_por_instrutor(atribuicoes: List[Dict]) -> str:
-    """
-    Gera gráfico de carga de trabalho por instrutor. (Lógica original mantida)
-    """
-    if not atribuicoes:
-        return _gerar_grafico_vazio("Carga por Instrutor")
-
-    carga = defaultdict(int)
-    habilidades = {}
+    """Gera histograma da carga de trabalho dos instrutores."""
+    cargas = {}
     for atr in atribuicoes:
-        instrutor_id = atr['instrutor'].id
-        carga[instrutor_id] += 1
-        habilidades[instrutor_id] = atr['instrutor'].habilidade
+        inst_id = atr['instrutor'].id
+        cargas[inst_id] = cargas.get(inst_id, 0) + 1
 
-    # Ordena os instrutores alfabeticamente para consistência
-    instrutores_ordenados = sorted(carga.keys(), key=lambda x: (isinstance(x, str), x))
-    cargas_ordenadas = [carga[inst] for inst in instrutores_ordenados]
-    cores = ['#2E86AB' if habilidades[inst] == 'PROG' else '#A23B72' for inst in instrutores_ordenados]
+    valores_carga = list(cargas.values())
 
-    fig, ax = plt.subplots(figsize=(14, max(8, len(instrutores_ordenados) * 0.4)))
-    barras = ax.barh(instrutores_ordenados, cargas_ordenadas, color=cores, edgecolor='black', linewidth=0.5)
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.hist(valores_carga, bins=range(min(valores_carga), max(valores_carga) + 2),
+            align='left', rwidth=0.8, color='skyblue', edgecolor='black')
 
-    ax.set_xlabel('Número de Turmas', fontsize=12, fontweight='bold')
-    ax.set_ylabel('Instrutor', fontsize=12, fontweight='bold')
-    ax.set_title('Carga de Trabalho por Instrutor', fontsize=14, fontweight='bold')
-    ax.grid(axis='x', alpha=0.3)
-
-    for barra, carga_val in zip(barras, cargas_ordenadas):
-        largura = barra.get_width()
-        ax.text(largura + 0.3, barra.get_y() + barra.get_height() / 2, str(int(carga_val)), va='center', fontsize=9, fontweight='bold')
-
-    prog_patch = mpatches.Patch(color='#2E86AB', label='Programação')
-    rob_patch = mpatches.Patch(color='#A23B72', label='Robótica')
-    ax.legend(handles=[prog_patch, rob_patch])
-
+    ax.set_title('Histograma de Carga de Trabalho (Turmas por Instrutor)', fontsize=14)
+    ax.set_xlabel('Número de Turmas')
+    ax.set_ylabel('Quantidade de Instrutores')
+    ax.set_xticks(range(min(valores_carga), max(valores_carga) + 1))
+    plt.grid(axis='y', alpha=0.5)
     plt.tight_layout()
-    output_dir = Path("resultados_otimizacao")
-    output_dir.mkdir(exist_ok=True)
-    caminho = str(output_dir / "grafico_carga_instrutor.png")
-    plt.savefig(caminho, dpi=300, bbox_inches='tight')
+
+    caminho = "resultados_otimizacao/grafico_carga_instrutores.png"
+    plt.savefig(caminho, dpi=300)
     plt.close()
     return caminho
 
-def plotar_conclusoes_por_mes(turmas: List[Turma],
-                              projetos: List[Projeto],
-                              meses: List[str],
-                              meses_ferias_idx: List[int]) -> str:
-    """
-    CORRIGIDO: Gera gráfico de turmas concluídas por mês, respeitando a lógica de pular férias.
-    """
-    print("  Calculando gráfico de conclusões por mês (Lógica de Férias Sincronizada)...")
-    conclusoes = defaultdict(lambda: defaultdict(int))
-    num_meses_total = len(meses)
 
-    for turma in turmas:
-        projeto_base_nome = turma.projeto.split('_Onda')[0]
+def gerar_grafico_demanda_prog_rob(turmas: List[Turma], projetos: List[Projeto],
+                                   meses: List[str], meses_ferias_idx: List[int]) -> Tuple[str, pd.DataFrame]:
+    """Gera gráfico de linha comparando demanda PROG vs ROB ao longo do tempo."""
+    num_meses = len(meses)
+    demanda_prog = np.zeros(num_meses)
+    demanda_rob = np.zeros(num_meses)
 
-        # --- Lógica Corrigida ---
-        # Usa a função central para obter os meses de atividade real
-        meses_ativos_reais = calcular_meses_ativos(turma.mes_inicio, turma.duracao, meses_ferias_idx, num_meses_total)
+    for t in turmas:
+        meses_ativos = calcular_meses_ativos(t.mes_inicio, t.duracao, meses_ferias_idx, num_meses)
+        for m in meses_ativos:
+            if t.habilidade == 'PROG':
+                demanda_prog[m] += 1
+            else:
+                demanda_rob[m] += 1
 
-        # O mês de conclusão é o último mês na lista de meses ativos
-        if meses_ativos_reais:
-            mes_fim = meses_ativos_reais[-1]
-            conclusoes[mes_fim][projeto_base_nome] += 1
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.plot(meses, demanda_prog, label='Programação', marker='o', linewidth=2, color='blue')
+    ax.plot(meses, demanda_rob, label='Robótica', marker='s', linewidth=2, color='orange')
 
-    todos_projetos = set()
-    for meses_dict in conclusoes.values():
-        todos_projetos.update(meses_dict.keys())
-    projetos_unicos = sorted(todos_projetos)
+    # Marcar meses de férias
+    for ferias_idx in meses_ferias_idx:
+        if ferias_idx < num_meses:
+            ax.axvspan(ferias_idx - 0.5, ferias_idx + 0.5, color='gray', alpha=0.2,
+                       label='Férias' if ferias_idx == meses_ferias_idx[0] else "")
 
-    output_dir = Path("resultados_otimizacao")
-    output_dir.mkdir(exist_ok=True)
-    caminho_saida = str(output_dir / "grafico_conclusoes_por_mes.png")
+    ax.set_title('Evolução da Demanda por Habilidade (Turmas Simultâneas)', fontsize=14)
+    ax.set_ylabel('Quantidade de Turmas')
+    ax.legend()
+    plt.xticks(rotation=45, ha='right')
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
 
-    if not projetos_unicos:
-        return _gerar_grafico_vazio("Turmas Concluídas por Mês", caminho_saida)
+    caminho = "resultados_otimizacao/grafico_demanda_habilidade.png"
+    plt.savefig(caminho, dpi=300)
+    plt.close()
 
-    dados_por_projeto = {}
-    for projeto_nome in projetos_unicos:
-        dados_por_projeto[projeto_nome] = [conclusoes[mes].get(projeto_nome, 0) for mes in range(num_meses_total)]
+    # Retorna também os dados para uso no relatório PDF
+    df_dados = pd.DataFrame({
+        'Mes': meses,
+        'Demanda_PROG': demanda_prog,
+        'Demanda_ROB': demanda_rob,
+        'Total': demanda_prog + demanda_rob
+    })
 
-    fig, ax = plt.subplots(figsize=(16, 8))
-    cores = plt.get_cmap('tab20')(np.linspace(0, 1, len(projetos_unicos)))
-    x_pos = range(num_meses_total)
-    bottom = np.zeros(num_meses_total)
+    return caminho, df_dados
 
-    for idx, projeto_nome in enumerate(projetos_unicos):
-        valores = np.array(dados_por_projeto[projeto_nome])
-        ax.bar(x_pos, valores, bottom=bottom, label=projeto_nome, color=cores[idx], edgecolor='white', linewidth=0.5)
-        bottom += valores
 
-    ax.set_xlabel('Mês de Conclusão', fontsize=12, fontweight='bold')
-    ax.set_ylabel('Quantidade de Turmas Concluídas', fontsize=12, fontweight='bold')
-    ax.set_title('Cumprimento de Metas: Turmas Concluídas por Mês', fontsize=14, fontweight='bold', pad=20)
-    ax.set_xticks(x_pos)
-    ax.set_xticklabels(meses, rotation=45, ha='right')
-    ax.grid(axis='y', alpha=0.3, linestyle='--')
-    ax.set_axisbelow(True)
-    ax.legend(title='Projetos', bbox_to_anchor=(1.05, 1), loc='upper left', frameon=True, shadow=True)
+def plotar_conclusoes_por_mes(turmas: List[Turma], projetos: List[Projeto],
+                              meses: List[str], meses_ferias_idx: List[int]) -> str:
+    """Gera gráfico de barras mostrando quantas turmas concluem em cada mês."""
+    num_meses = len(meses)
+    conclusoes = np.zeros(num_meses)
 
-    for i, total in enumerate(bottom):
-        if total > 0:
-            ax.text(i, total, f'{int(total)}', ha='center', va='bottom', fontsize=9, fontweight='bold',
-                    bbox=dict(facecolor='white', alpha=0.6, edgecolor='none', boxstyle='round,pad=0.2'))
+    for t in turmas:
+        # Calcula o mês real de término considerando os "pulos" das férias
+        meses_ativos = calcular_meses_ativos(t.mes_inicio, t.duracao, meses_ferias_idx, num_meses)
+        if meses_ativos:
+            ultimo_mes_ativo = meses_ativos[-1]
+            # A conclusão ocorre no mês SEGUINTE ao último mês de aula, ou no próprio mês se for o fim do contrato
+            # Aqui vamos considerar o último mês de aula como o mês de "formatura"
+            conclusoes[ultimo_mes_ativo] += 1
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    bars = ax.bar(meses, conclusoes, color='green', alpha=0.6)
+
+    ax.set_title('Previsão de Conclusão de Turmas por Mês', fontsize=14)
+    ax.set_ylabel('Turmas Concluídas')
+    plt.xticks(rotation=45, ha='right')
+
+    # Adicionar valores no topo das barras
+    for bar in bars:
+        height = bar.get_height()
+        if height > 0:
+            ax.text(bar.get_x() + bar.get_width() / 2., height,
+                    f'{int(height)}',
+                    ha='center', va='bottom')
 
     plt.tight_layout()
-    plt.savefig(caminho_saida, dpi=300, bbox_inches='tight')
+    caminho = "resultados_otimizacao/grafico_conclusoes.png"
+    plt.savefig(caminho, dpi=300)
     plt.close()
-    print(f"    - Gráfico salvo em: {caminho_saida}")
-    return caminho_saida
+    return caminho
+
+
+def gerar_grafico_fluxo_caixa(atribuicoes: List[Dict], meses: List[str],
+                              meses_ferias_idx: List[int], parametros_financeiros: ParametrosFinanceiros) -> str:
+    """
+    Gera gráfico financeiro combinado:
+    - Barras: Custo Mensal
+    - Linha: Custo Acumulado
+    """
+    custo_mensal_unitario = parametros_financeiros.custo_mensal_instrutor
+    num_meses = len(meses)
+
+    # Calcular instrutores ativos por mês
+    instrutores_ativos_por_mes = {m: set() for m in range(num_meses)}
+    for atr in atribuicoes:
+        t = atr['turma']
+        i = atr['instrutor']
+        meses_ativos = calcular_meses_ativos(t.mes_inicio, t.duracao, meses_ferias_idx, num_meses)
+        for m in meses_ativos:
+            instrutores_ativos_por_mes[m].add(i.id)
+
+    custos_mensais = []
+    custos_acumulados = []
+    acumulado = 0
+
+    for m in range(num_meses):
+        qtd = len(instrutores_ativos_por_mes[m])
+        custo = qtd * custo_mensal_unitario
+        acumulado += custo
+        custos_mensais.append(custo)
+        custos_acumulados.append(acumulado)
+
+    # Plotagem
+    fig, ax1 = plt.subplots(figsize=(14, 7))
+
+    # Eixo 1: Barras (Custo Mensal)
+    color_bar = 'tab:blue'
+    ax1.set_xlabel('Mês')
+    ax1.set_ylabel('Custo Mensal (R$)', color=color_bar)
+    bars = ax1.bar(meses, custos_mensais, color=color_bar, alpha=0.6, label='Custo Mensal')
+    ax1.tick_params(axis='y', labelcolor=color_bar)
+    plt.xticks(rotation=45, ha='right')
+
+    # Eixo 2: Linha (Acumulado)
+    ax2 = ax1.twinx()
+    color_line = 'tab:red'
+    ax2.set_ylabel('Custo Acumulado (R$)', color=color_line)
+    ax2.plot(meses, custos_acumulados, color=color_line, linewidth=2, marker='o', label='Acumulado')
+    ax2.tick_params(axis='y', labelcolor=color_line)
+
+    # Formatação de valores no topo das barras (abreviado, ex: 50k)
+    for bar in bars:
+        height = bar.get_height()
+        if height > 0:
+            ax1.text(bar.get_x() + bar.get_width() / 2., height,
+                     f'R${height / 1000:.0f}k',
+                     ha='center', va='bottom', fontsize=8)
+
+    plt.title('Fluxo de Caixa Projetado: Mensal vs Acumulado', fontsize=16)
+    fig.tight_layout()
+
+    caminho = "resultados_otimizacao/grafico_fluxo_caixa.png"
+    plt.savefig(caminho, dpi=300)
+    plt.close()
+    return caminho

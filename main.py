@@ -1,7 +1,6 @@
-# ARQUIVO: main.py
 """
 Sistema de Otimização de Alocação de Instrutores
-Versão 2.6 - Corrigida
+Versão 2.8 - Com Relatórios Financeiros Completos
 Autor: Sistema Idear
 """
 
@@ -21,13 +20,14 @@ from otimizador.utils import (
 )
 from otimizador.core import stage_1, stage_2
 from otimizador.reporting import plotting, spreadsheets, pdf_generator
+from otimizador.data_models import ParametrosFinanceiros
 
 
 def main():
     """Função principal do sistema de otimização."""
     print("=" * 80)
     print("SISTEMA DE OTIMIZAÇÃO DE ALOCAÇÃO DE INSTRUTORES")
-    print("Versão 2.6 (Corrigida)")
+    print("Versão 2.8 (Com Relatórios Financeiros)")
     print("=" * 80)
 
     try:
@@ -35,40 +35,36 @@ def main():
         # ETAPA 1: GERENCIAMENTO E OBTENÇÃO DE CONFIGURAÇÕES
         # ===========================
         print("\n--- Etapa 1: Configuração ---")
-        parametros, projetos_config = config_manager.menu_gerenciar_configuracoes()
+        parametros, projetos_config, parametros_financeiros = config_manager.menu_gerenciar_configuracoes()
 
         if not (parametros and projetos_config):
             print("\nCriando nova configuração...")
             parametros = user_input.obter_parametros_usuario()
             projetos_config = user_input.obter_projetos_usuario()
-
-            salvar = input("\nDeseja salvar esta configuração? (S/N) [S]: ").strip().upper()
-            if salvar in ('', 'S'):
-                config_manager.salvar_configuracao(parametros, projetos_config)
+            parametros_financeiros = None
         else:
             print("\nConfigurações carregadas:")
             user_input.exibir_resumo_parametros(parametros)
             user_input.exibir_resumo_projetos(projetos_config)
+            if parametros_financeiros:
+                print(f"\n[Financeiro] Custo Instrutor: R$ {parametros_financeiros.custo_mensal_instrutor:.2f}")
 
         # ===========================
         # ETAPA 2: PREPARAÇÃO DE DADOS
         # ===========================
         print("\n--- Etapa 2: Preparação de Dados ---")
 
-        # Calcular intervalo de datas
         dt_min = min(datetime.strptime(p.data_inicio, "%d/%m/%Y") for p in projetos_config)
         dt_max = max(datetime.strptime(p.data_termino, "%d/%m/%Y") for p in projetos_config)
 
         print(f"Período total: {dt_min.strftime('%d/%m/%Y')} até {dt_max.strftime('%d/%m/%Y')}")
 
-        # Gerar lista de meses
         meses = gerar_lista_meses(
             dt_min.strftime("%d/%m/%Y"),
             dt_max.strftime("%d/%m/%Y")
         )
         print(f"Total de meses: {len(meses)}")
 
-        # Identificar índices dos meses de férias
         meses_ferias_idx = [meses.index(m) for m in parametros.meses_ferias if m in meses]
         if meses_ferias_idx:
             print(f"Meses de férias identificados: {len(meses_ferias_idx)}")
@@ -86,10 +82,10 @@ def main():
         print(f"Projetos convertidos: {len(projetos_modelo)}")
 
         # ===========================
-        # ETAPA 4: OTIMIZAÇÃO - ESTÁGIO 1 (Nivelamento de Demanda)
+        # ETAPA 4: OTIMIZAÇÃO - ESTÁGIO 1
         # ===========================
         print("\n" + "=" * 80)
-        print("ESTÁGIO 1: OTIMIZAÇÃO DO CRONOGRAMA (Nivelamento de Demanda)")
+        print("ESTÁGIO 1: OTIMIZAÇÃO DO CRONOGRAMA")
         print("=" * 80)
 
         resultados_estagio1 = stage_1.otimizar_curva_demanda(
@@ -99,17 +95,7 @@ def main():
         )
 
         if not resultados_estagio1:
-            print("\n" + "="*80)
-            print("[ERRO CRÍTICO] O Estágio 1 (Otimização de Cronograma) FALHOU.")
-            print("O otimizador não conseguiu encontrar uma solução viável com as restrições atuais.")
-            print("\nCAUSAS PROVÁVEIS:")
-            print("  1. JANELA DE PROJETO MUITO CURTA: A duração de um projeto, somada aos meses de férias que precisam ser 'pulados', pode exceder a data de término permitida para esse projeto.")
-            print("  2. MUITAS TURMAS, POUCO TEMPO: A quantidade total de turmas pode ser muito alta para ser alocada nos meses 'úteis' disponíveis.")
-            print("  3. PICO MÁXIMO MUITO RESTRITIVO: O parâmetro 'pico_maximo_turmas' pode ser muito baixo para acomodar a concentração de turmas fora dos meses de férias.")
-            print("\nSUGESTÕES:")
-            print("  - Revise as datas de início/término e a duração dos projetos na sua configuração.")
-            print("  - Considere flexibilizar (aumentar) o parâmetro 'pico_maximo_turmas'.")
-            print("="*80)
+            print("\n[ERRO CRÍTICO] O Estágio 1 FALHOU.")
             sys.exit(1)
 
         resultados_estagio1['periodo'] = f"{dt_min.strftime('%d/%m/%Y')} a {dt_max.strftime('%d/%m/%Y')}"
@@ -118,10 +104,10 @@ def main():
         print("\n✓ Estágio 1 concluído com sucesso!")
 
         # ===========================
-        # ETAPA 5: OTIMIZAÇÃO - ESTÁGIO 2 (Atribuição de Instrutores)
+        # ETAPA 5: OTIMIZAÇÃO - ESTÁGIO 2
         # ===========================
         print("\n" + "=" * 80)
-        print("ESTÁGIO 2: ATRIBUIÇÃO DE INSTRUTORES E BALANCEAMENTO")
+        print("ESTÁGIO 2: ATRIBUIÇÃO DE INSTRUTORES")
         print("=" * 80)
 
         resultados_estagio2 = stage_2.otimizar_atribuicao_e_carga(
@@ -135,13 +121,13 @@ def main():
         resultados_estagio2['spread_max_permitido'] = parametros.spread_maximo
 
         if not resultados_estagio2 or resultados_estagio2.get("status") == "falha":
-            print("\n[ERRO] Falha no Estágio 2. Tente aumentar o spread ou o timeout.")
+            print("\n[ERRO] Falha no Estágio 2.")
             sys.exit(1)
 
         print("\n✓ Estágio 2 concluído com sucesso!")
 
         # ===========================
-        # ETAPA 6: PÓS-PROCESSAMENTO
+        # ETAPA 6: PÓS-PROCESSAMENTO E FINANCEIRO
         # ===========================
         print("\n--- Etapa 6: Pós-processamento ---")
 
@@ -154,6 +140,17 @@ def main():
             resultados_estagio2['atribuicoes']
         )
         print("✓ Distribuição por projeto calculada")
+
+        # --- MÓDULO FINANCEIRO (INPUT) ---
+        if parametros_financeiros is None:
+            print("\n" + "*" * 60)
+            print("COLETA DE DADOS FINANCEIROS")
+            print("*" * 60)
+            parametros_financeiros = user_input.obter_parametros_financeiros()
+
+            salvar = input("\nDeseja salvar esta configuração completa? (S/N) [S]: ").strip().upper()
+            if salvar in ('', 'S'):
+                config_manager.salvar_configuracao(parametros, projetos_config, parametros_financeiros)
 
         # ===========================
         # ETAPA 7: GERAÇÃO DE RELATÓRIOS
@@ -170,72 +167,67 @@ def main():
         df_consolidada_instrutor = spreadsheets.gerar_planilha_consolidada_instrutor(
             resultados_estagio2['atribuicoes']
         )
+        # Passamos os parametros_financeiros aqui para gerar a aba extra
         spreadsheets.gerar_planilha_detalhada(
             resultados_estagio2['atribuicoes'],
             meses,
-            meses_ferias_idx
+            meses_ferias_idx,
+            parametros_financeiros
         )
 
         print("\n2. Gerando gráficos...")
         graficos = {}
 
+        # Gráficos padrão
         try:
             graficos['projeto_mes'] = plotting.gerar_grafico_turmas_projeto_mes(
-                resultados_estagio2['turmas'],
-                projetos_modelo,
-                meses,
-                meses_ferias_idx
-            )
+                resultados_estagio2['turmas'], projetos_modelo, meses, meses_ferias_idx)
             print("  ✓ Gráfico turmas/projeto/mês")
         except Exception as e:
-            print(f"  ⚠ Erro no gráfico turmas/projeto/mês: {e}")
-            graficos['projeto_mes'] = None
+            print(f"  ⚠ Erro: {e}")
 
         try:
             graficos['instrutor_projeto'] = plotting.gerar_grafico_turmas_instrutor_tipologia_projeto(
-                resultados_estagio2['atribuicoes']
-            )
+                resultados_estagio2['atribuicoes'])
             print("  ✓ Gráfico turmas/instrutor/projeto")
         except Exception as e:
-            print(f"  ⚠ Erro no gráfico turmas/instrutor/projeto: {e}")
-            graficos['instrutor_projeto'] = None
+            print(f"  ⚠ Erro: {e}")
 
         try:
             graficos['carga_instrutor'] = plotting.gerar_grafico_carga_por_instrutor(
-                resultados_estagio2['atribuicoes']
-            )
+                resultados_estagio2['atribuicoes'])
             print("  ✓ Gráfico carga/instrutor")
         except Exception as e:
-            print(f"  ⚠ Erro no gráfico carga/instrutor: {e}")
-            graficos['carga_instrutor'] = None
+            print(f"  ⚠ Erro: {e}")
 
         try:
             graficos['prog_rob'], serie_temporal_df = plotting.gerar_grafico_demanda_prog_rob(
-                resultados_estagio2['turmas'],
-                projetos_modelo,
-                meses,
-                meses_ferias_idx
-            )
+                resultados_estagio2['turmas'], projetos_modelo, meses, meses_ferias_idx)
             print("  ✓ Gráfico demanda PROG/ROB")
         except Exception as e:
-            print(f"  ⚠ Erro no gráfico demanda PROG/ROB: {e}")
-            graficos['prog_rob'] = None
+            print(f"  ⚠ Erro: {e}")
             serie_temporal_df = pd.DataFrame()
 
-        # --- INÍCIO DA ALTERAÇÃO CORRIGIDA ---
         try:
-            # A chamada agora usa os argumentos corretos e a função retorna o caminho diretamente.
             graficos['conclusoes'] = plotting.plotar_conclusoes_por_mes(
-                resultados_estagio2['turmas'],
-                projetos_modelo,
-                meses,
-                meses_ferias_idx
-            )
+                resultados_estagio2['turmas'], projetos_modelo, meses, meses_ferias_idx)
             print("  ✓ Gráfico conclusões/mês")
         except Exception as e:
-            print(f"  ⚠ Erro no gráfico conclusões/mês: {e}")
-            graficos['conclusoes'] = None
-        # --- FIM DA ALTERAÇÃO CORRIGIDA ---
+            print(f"  ⚠ Erro: {e}")
+
+        # --- GRÁFICO FINANCEIRO (NOVO) ---
+        if parametros_financeiros:
+            try:
+                graficos['financeiro'] = plotting.gerar_grafico_fluxo_caixa(
+                    resultados_estagio2['atribuicoes'],
+                    meses,
+                    meses_ferias_idx,
+                    parametros_financeiros
+                )
+                print("  ✓ Gráfico Fluxo de Caixa")
+            except Exception as e:
+                print(f"  ⚠ Erro no gráfico financeiro: {e}")
+                graficos['financeiro'] = None
 
         print("\n3. Gerando relatório PDF...")
         pdf_generator.gerar_relatorio_pdf(
@@ -247,7 +239,8 @@ def main():
             df_consolidada_instrutor=df_consolidada_instrutor,
             contagem_instrutores_hab=contagem_instrutores_hab,
             distribuicao_por_projeto=distribuicao_por_projeto,
-            pico_maximo_limite=parametros.pico_maximo_turmas
+            pico_maximo_limite=parametros.pico_maximo_turmas,
+            parametros_financeiros=parametros_financeiros  # Passando o novo parâmetro
         )
 
         print("\n4. Limpando arquivos temporários...")

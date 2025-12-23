@@ -77,7 +77,7 @@ class ParametrosOtimizacao:
     meses_ferias: List[str] = field(default_factory=lambda: ['Jul/26', 'Dez/26'])
     timeout_segundos: int = 180
 
-    # <<< ALTERAÇÃO: Novos parâmetros de otimização >>>
+    # Novos parâmetros de otimização
     peso_instrutores: int = 10000
     peso_spread: int = 1
     pico_maximo_turmas: int = 60
@@ -97,7 +97,6 @@ class ParametrosOtimizacao:
         if not isinstance(self.timeout_segundos, int) or not (10 <= self.timeout_segundos <= 3600):
             raise ValueError(f"Timeout deve estar entre 10 e 3600 segundos. Recebido: {self.timeout_segundos}")
 
-        # <<< ALTERAÇÃO: Validação dos novos parâmetros >>>
         if not isinstance(self.peso_instrutores, int) or not (1 <= self.peso_instrutores <= 100000):
             raise ValueError(f"Peso instrutores deve estar entre 1 e 100000. Recebido: {self.peso_instrutores}")
 
@@ -106,3 +105,16 @@ class ParametrosOtimizacao:
 
         if not isinstance(self.pico_maximo_turmas, int) or not (1 <= self.pico_maximo_turmas <= 500):
             raise ValueError(f"Pico máximo deve estar entre 1 e 500. Recebido: {self.pico_maximo_turmas}")
+
+
+@dataclass
+class ParametrosFinanceiros:
+    """
+    Parâmetros para o módulo financeiro.
+    """
+    custo_mensal_instrutor: float = 0.0
+    moeda: str = "BRL"
+
+    def __post_init__(self):
+        if self.custo_mensal_instrutor < 0:
+            raise ValueError("O custo mensal do instrutor não pode ser negativo.")
