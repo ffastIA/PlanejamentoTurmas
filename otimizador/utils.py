@@ -1,11 +1,11 @@
-# ARQUIVO: otimizador/utils.py
-
 from datetime import datetime, timedelta
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Any
 from collections import defaultdict
+import pandas as pd
+import numpy as np
 
 # Import relativo para acessar os modelos de dados
-from .data_models import Projeto, ConfiguracaoProjeto, ParametrosOtimizacao, Instrutor
+from .data_models import Projeto, ConfiguracaoProjeto, ParametrosOtimizacao, Instrutor, ParametrosFinanceiros
 
 
 def gerar_lista_meses(data_inicio: str, data_fim: str) -> List[str]:
@@ -44,32 +44,16 @@ def calcular_meses_ativos(mes_inicio: int,
                           meses_ferias_idx: list,
                           num_meses_total: int) -> list:
     """
-    Calcula os meses de calendário em que uma turma está ativa, pulando os meses de férias.
-
-    Args:
-        mes_inicio: O índice do mês em que a turma começa.
-        duracao: A duração da turma em meses letivos.
-        meses_ferias_idx: Uma lista com os índices dos meses de férias.
-        num_meses_total: O número total de meses no horizonte de planejamento.
-
-    Returns:
-        Uma lista com os índices dos meses em que a turma estará efetivamente ativa.
+    Calcula os meses de calendário em que uma turma está ativa ACADEMICAMENTE (pulando férias).
     """
     meses_ativos = []
     meses_letivos_contados = 0
     mes_calendario_atual = mes_inicio
 
-    # Continua até que tenhamos contado todos os meses da duração do curso
-    # ou até que o calendário acabe.
     while meses_letivos_contados < duracao and mes_calendario_atual < num_meses_total:
-
-        # Verifica se o mês atual do calendário NÃO é um mês de férias
         if mes_calendario_atual not in meses_ferias_idx:
-            # Se não for férias, é um mês ativo para a turma.
             meses_ativos.append(mes_calendario_atual)
             meses_letivos_contados += 1
-
-        # Avança para o próximo mês do calendário, independentemente de ser férias ou não.
         mes_calendario_atual += 1
 
     return meses_ativos
@@ -121,9 +105,9 @@ def converter_projetos_para_modelo(projetos_config: List[ConfiguracaoProjeto], m
             prog_por_onda, rob_por_onda = prog_total // config.ondas, rob_total // config.ondas
             for onda_idx in range(config.ondas):
                 prog_onda = prog_total - (
-                            prog_por_onda * (config.ondas - 1)) if onda_idx == config.ondas - 1 else prog_por_onda
+                        prog_por_onda * (config.ondas - 1)) if onda_idx == config.ondas - 1 else prog_por_onda
                 rob_onda = rob_total - (
-                            rob_por_onda * (config.ondas - 1)) if onda_idx == config.ondas - 1 else rob_por_onda
+                        rob_por_onda * (config.ondas - 1)) if onda_idx == config.ondas - 1 else rob_por_onda
                 nome_onda = f"{config.nome}_Onda{onda_idx + 1}"
                 projetos_modelo.append(
                     Projeto(nome_onda, prog_onda, rob_onda, config.duracao_curso, inicio_min, inicio_max,
@@ -157,21 +141,13 @@ def renumerar_instrutores_ativos(atribuicoes: List[Dict]) -> Tuple[List[Dict], D
 
 
 def analisar_distribuicao_instrutores_por_projeto(atribuicoes: List[Dict]) -> Dict[str, Dict[str, int]]:
-    """
-    Analisa as atribuições para contar quantos instrutores únicos de cada habilidade
-    foram alocados a cada projeto.
-    """
-    # Estrutura: { 'NomeProjeto': {'PROG': set_de_ids, 'ROBOTICA': set_de_ids} }
+    """Analisa as atribuições para contar quantos instrutores únicos por projeto."""
     instrutores_vistos = defaultdict(lambda: defaultdict(set))
-
     for atr in atribuicoes:
-        # Pega o nome base do projeto, mesmo que seja uma onda (ex: "DD2_Onda1" -> "DD2")
         projeto_base_nome = atr['turma'].projeto.split('_Onda')[0]
         instrutor = atr['instrutor']
-        # Adiciona o ID do instrutor ao set daquele projeto/habilidade
         instrutores_vistos[projeto_base_nome][instrutor.habilidade].add(instrutor.id)
 
-    # Converte os sets para contagens (len)
     contagem_final = {
         proj: {
             'PROG': len(hab_sets.get('PROG', set())),
@@ -180,3 +156,74 @@ def analisar_distribuicao_instrutores_por_projeto(atribuicoes: List[Dict]) -> Di
         for proj, hab_sets in instrutores_vistos.items()
     }
     return contagem_final
+
+
+def calcular_fluxo_caixa_detalhado(atribuicoes: List[Dict],
+                                   meses: List[str],
+                                   meses_ferias_idx: List[int],
+                                   parametros_financeiros: ParametrosFinanceiros) -> pd.DataFrame:
+    """
+    Calcula o fluxo de caixa detalhado baseado nos 4 tipos de custos.
+    Retorna um DataFrame com o custo total mês a mês.
+    """
+    num_meses = len(meses)
+    # Inicializa array de custos por mês
+    custos_mensais = np.zeros(num_meses)
+
+    # Se não houver custos configurados, retorna vazio
+    if not parametros_financeiros or not parametros_financeiros.itens_custo:
+        return pd.DataFrame()
+
+    # 1. Processar Custos PERMANENTES (Independente de turmas)
+    # Aplica-se a todos os meses da vigência do projeto (assumindo vigência = lista de meses gerada)
+    for item in parametros_financeiros.itens_custo:
+        if item.tipo == 'PERMANENTE':
+            custos_mensais += item.valor
+
+    # 2. Processar Custos Vinculados a Turmas (INICIAL, ENCERRAMENTO, EXECUCAO)
+    for atr in atribuicoes:
+        t = atr['turma']
+
+        # Identificar meses academicamente ativos
+        meses_academicos = calcular_meses_ativos(t.mes_inicio, t.duracao, meses_ferias_idx, num_meses)
+
+        if not meses_academicos:
+            continue
+
+        mes_inicio_real = meses_academicos[0]
+        mes_fim_real = meses_academicos[-1]  # Último mês de aula
+
+        # Definição do período de EXECUÇÃO (Calendário corrido, inclui férias)
+        # Vai do mês de início até o mês de término, inclusive
+        periodo_execucao = range(mes_inicio_real, min(mes_fim_real + 1, num_meses))
+
+        for item in parametros_financeiros.itens_custo:
+            if item.tipo == 'INICIAL':
+                # Aplica apenas no mês de início
+                if mes_inicio_real < num_meses:
+                    custos_mensais[mes_inicio_real] += item.valor
+
+            elif item.tipo == 'ENCERRAMENTO':
+                # Aplica apenas no mês de término
+                if mes_fim_real < num_meses:
+                    custos_mensais[mes_fim_real] += item.valor
+
+            elif item.tipo == 'EXECUCAO':
+                # Aplica em todos os meses do período de execução (incluindo férias)
+                for m in periodo_execucao:
+                    if m < num_meses:
+                        custos_mensais[m] += item.valor
+
+    # Montar DataFrame
+    dados = []
+    acumulado = 0.0
+    for idx, mes in enumerate(meses):
+        valor_mes = custos_mensais[idx]
+        acumulado += valor_mes
+        dados.append({
+            'Mês': mes,
+            'Custo Mensal': valor_mes,
+            'Custo Acumulado': acumulado
+        })
+
+    return pd.DataFrame(dados)
