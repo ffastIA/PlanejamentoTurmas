@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 from ..utils import calcular_meses_ativos, calcular_fluxo_caixa_detalhado
 from ..data_models import Projeto, Turma, ParametrosFinanceiros
 
@@ -9,26 +9,62 @@ plt.style.use('ggplot')
 
 
 def gerar_grafico_turmas_projeto_mes(turmas: List[Turma], projetos: List[Projeto], meses: List[str],
-                                     meses_ferias_idx: List[int]) -> str:
+                                     meses_ferias_idx: List[int], projeto_filtro: str = None) -> str:
+    """
+    Gera gráfico de execução de turmas.
+    Se projeto_filtro for None: Gera gráfico empilhado com TODOS os projetos.
+    Se projeto_filtro for preenchido: Gera gráfico apenas daquele projeto.
+    """
     num_meses = len(meses)
-    dados = {p.nome: np.zeros(num_meses) for p in projetos}
+
+    # Se tiver filtro, inicializa apenas aquele projeto, senão inicializa todos
+    if projeto_filtro:
+        dados = {projeto_filtro: np.zeros(num_meses)}
+    else:
+        dados = {p.nome: np.zeros(num_meses) for p in projetos}
+
     for t in turmas:
-        for m in calcular_meses_ativos(t.mes_inicio, t.duracao, meses_ferias_idx, num_meses):
-            dados[t.projeto.split('_Onda')[0]][m] += 1
+        nome_proj = t.projeto.split('_Onda')[0]
+
+        # Lógica de filtro
+        if projeto_filtro and nome_proj != projeto_filtro:
+            continue
+
+        if nome_proj in dados:
+            for m in calcular_meses_ativos(t.mes_inicio, t.duracao, meses_ferias_idx, num_meses):
+                dados[nome_proj][m] += 1
+
+    # Verifica se tem dados para plotar
+    total_turmas = sum(np.sum(vals) for vals in dados.values())
+    if total_turmas == 0:
+        return None
 
     fig, ax = plt.subplots(figsize=(14, 7))
     bottom = np.zeros(num_meses)
-    for nome, vals in dados.items():
-        ax.bar(meses, vals, bottom=bottom, label=nome, alpha=0.8)
-        bottom += vals
 
-    ax.set_title('Turmas Ativas por Projeto');
-    ax.legend()
-    plt.xticks(rotation=45, ha='right');
+    # Cores: Se for individual usa azul padrão, se for consolidado usa cores variadas
+    if projeto_filtro:
+        ax.bar(meses, dados[projeto_filtro], color='tab:blue', alpha=0.7, label=projeto_filtro)
+    else:
+        for nome, vals in dados.items():
+            if np.sum(vals) > 0:
+                ax.bar(meses, vals, bottom=bottom, label=nome, alpha=0.8)
+                bottom += vals
+
+    titulo = f'Cronograma de Execução: {projeto_filtro}' if projeto_filtro else 'Cronograma de Execução CONSOLIDADO (Todas as Turmas)'
+    ax.set_title(titulo)
+    ax.set_ylabel('Quantidade de Turmas Ativas')
+
+    if not projeto_filtro:
+        ax.legend()
+
+    plt.xticks(rotation=45, ha='right')
     plt.tight_layout()
-    path = "resultados_otimizacao/grafico_turmas_projeto.png"
-    plt.savefig(path);
-    plt.close();
+
+    sufixo = f"_{projeto_filtro}" if projeto_filtro else "_CONSOLIDADO"
+    path = f"resultados_otimizacao/grafico_cronograma{sufixo}.png"
+    plt.savefig(path)
+    plt.close()
     return path
 
 
@@ -116,12 +152,14 @@ def plotar_conclusoes_por_mes(turmas: List[Turma], projetos: List[Projeto], mese
 
 
 def gerar_grafico_fluxo_caixa(atribuicoes: List[Dict], meses: List[str], meses_ferias_idx: List[int],
-                              parametros_financeiros: ParametrosFinanceiros) -> str:
+                              parametros_financeiros: ParametrosFinanceiros, projeto_filtro: str = None) -> str:
     """Gera gráfico financeiro usando a lógica unificada de custos."""
-    df = calcular_fluxo_caixa_detalhado(atribuicoes, meses, meses_ferias_idx, parametros_financeiros)
-    if df.empty: return None
+    df = calcular_fluxo_caixa_detalhado(atribuicoes, meses, meses_ferias_idx, parametros_financeiros, projeto_filtro)
+    if df.empty or df['Custo Mensal'].sum() == 0: return None
 
     fig, ax1 = plt.subplots(figsize=(14, 7))
+
+    titulo = f'Fluxo de Caixa: {projeto_filtro}' if projeto_filtro else 'Fluxo de Caixa Consolidado'
 
     ax1.bar(df['Mês'], df['Custo Mensal'], color='tab:blue', alpha=0.6, label='Mensal')
     ax1.set_ylabel('Custo Mensal (R$)', color='tab:blue')
@@ -133,9 +171,11 @@ def gerar_grafico_fluxo_caixa(atribuicoes: List[Dict], meses: List[str], meses_f
     ax2.set_ylabel('Acumulado (R$)', color='tab:red')
     ax2.tick_params(axis='y', labelcolor='tab:red')
 
-    plt.title('Fluxo de Caixa Projetado (Todos os Custos)', fontsize=16)
+    plt.title(titulo, fontsize=16)
     fig.tight_layout()
-    path = "resultados_otimizacao/grafico_fluxo_caixa.png"
+
+    sufixo = f"_{projeto_filtro}" if projeto_filtro else "_CONSOLIDADO"
+    path = f"resultados_otimizacao/grafico_fluxo_caixa{sufixo}.png"
     plt.savefig(path);
     plt.close();
     return path

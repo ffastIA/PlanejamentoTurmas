@@ -1,7 +1,7 @@
 from collections import namedtuple
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
 # Estruturas de dados para a lógica do otimizador
 Projeto = namedtuple('Projeto', [
@@ -32,7 +32,7 @@ class ConfiguracaoProjeto:
     percentual_prog: float = 60.0
     turmas_min_por_mes: int = 1
 
-    # Campos calculados (não inicializados pelo usuário)
+    # Campos calculados
     mes_inicio_idx: int = field(default=None, init=False)
     mes_termino_idx: int = field(default=None, init=False)
 
@@ -103,6 +103,7 @@ class ItemCusto:
     tipo: str  # 'INICIAL', 'ENCERRAMENTO', 'EXECUCAO', 'PERMANENTE'
     descricao: str
     valor: float
+    projeto: Optional[str] = None  # None = Global, String = Nome do Projeto
 
 @dataclass
 class ParametrosFinanceiros:
@@ -112,5 +113,5 @@ class ParametrosFinanceiros:
     itens_custo: List[ItemCusto] = field(default_factory=list)
     moeda: str = "BRL"
 
-    def adicionar_custo(self, tipo: str, descricao: str, valor: float):
-        self.itens_custo.append(ItemCusto(tipo, descricao, valor))
+    def adicionar_custo(self, tipo: str, descricao: str, valor: float, projeto: Optional[str] = None):
+        self.itens_custo.append(ItemCusto(tipo, descricao, valor, projeto))

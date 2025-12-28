@@ -22,7 +22,7 @@ def salvar_configuracao(parametros: ParametrosOtimizacao, projetos: List[Configu
             nome_config = "".join(c for c in nome_config if c.isalnum() or c in ('_', '-'))
 
         config_data = {
-            "metadata": {"nome": nome_config, "data_criacao": datetime.now().isoformat(), "versao": "3.0"},
+            "metadata": {"nome": nome_config, "data_criacao": datetime.now().isoformat(), "versao": "3.1"},
             "parametros": parametros.__dict__,
             "projetos": [p.__dict__ for p in projetos]
         }
@@ -88,7 +88,7 @@ def carregar_configuracao(arquivo: Optional[Path] = None) -> Tuple[
         if fin_data:
             itens_raw = fin_data.pop('itens_custo', [])
             fin = ParametrosFinanceiros(**fin_data)
-            # Reconstrói os objetos ItemCusto
+            # Reconstrói os objetos ItemCusto corretamente
             fin.itens_custo = [ItemCusto(**item) for item in itens_raw]
 
         print(f"\n[✓] Carregado: {arquivo.stem}")
@@ -98,10 +98,24 @@ def carregar_configuracao(arquivo: Optional[Path] = None) -> Tuple[
         return None, None, None
 
 
+def deletar_configuracao():
+    print("Funcionalidade não implementada.")
+
+
 def menu_gerenciar_configuracoes():
+    print("\n" + "=" * 80 + "\nGERENCIAMENTO DE CONFIGURAÇÕES\n" + "=" * 80)
     configs = listar_configuracoes_salvas()
-    print(f"\nConfigurações salvas: {len(configs)}")
-    print("[1] Nova | [2] Carregar | [3] Deletar | [S] Sair")
+    print(f"Configurações salvas: {len(configs)}\n")
+
+    # --- CORREÇÃO: As opções de print foram recolocadas aqui ---
+    print("Opções:")
+    print("  [1] Nova configuração (padrão ou customizada)")
+    if configs:
+        print("  [2] Carregar configuração salva")
+        print("  [3] Deletar configuração salva")
+    print("  [S] Sair")
+    # -----------------------------------------------------------
+
     while True:
         opt = input("\nOpção: ").strip().upper()
         if opt == 'S': raise KeyboardInterrupt()
@@ -109,5 +123,8 @@ def menu_gerenciar_configuracoes():
         if opt == '2' and configs:
             res = carregar_configuracao()
             if res[0]: return res
-        elif opt == '3':
-            print("Não implementado."); return menu_gerenciar_configuracoes()
+        elif opt == '3' and configs:
+            deletar_configuracao()
+            return menu_gerenciar_configuracoes()
+        else:
+            print("[!] Opção inválida.")

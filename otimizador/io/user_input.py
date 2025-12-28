@@ -45,13 +45,12 @@ def obter_parametros_usuario() -> ParametrosOtimizacao:
         sys.exit(1)
 
 
-def obter_parametros_financeiros() -> ParametrosFinanceiros:
-    """Solicita múltiplos custos ao usuário via CLI."""
+def obter_parametros_financeiros(projetos_disponiveis: List[ConfiguracaoProjeto]) -> ParametrosFinanceiros:
+    """Solicita múltiplos custos ao usuário via CLI, permitindo alocação por projeto."""
     print("\n" + "=" * 80)
     print("CONFIGURAÇÃO DO MÓDULO FINANCEIRO")
     print("=" * 80)
-    print("Defina os custos associados ao projeto e às turmas.")
-    print("NOTA: O antigo 'Custo de Instrutor' deve ser inserido aqui como um custo de 'EXECUÇÃO'.\n")
+    print("Defina os custos. Você pode definir custos GLOBAIS ou ESPECÍFICOS por projeto.\n")
 
     params_fin = ParametrosFinanceiros()
 
@@ -65,10 +64,10 @@ def obter_parametros_financeiros() -> ParametrosFinanceiros:
     while True:
         print("\n--- Adicionar Novo Custo ---")
         print("Tipos disponíveis:")
-        print("  [1] INICIAL      (Ocorre uma vez no início da turma)")
-        print("  [2] ENCERRAMENTO (Ocorre uma vez no final da turma)")
-        print("  [3] EXECUÇÃO     (Mensal durante a turma - inclui férias)")
-        print("  [4] PERMANENTE   (Mensal durante todo o projeto)")
+        print("  [1] INICIAL      (Início da turma)")
+        print("  [2] ENCERRAMENTO (Final da turma)")
+        print("  [3] EXECUÇÃO     (Mensal durante a turma)")
+        print("  [4] PERMANENTE   (Mensal durante todo o projeto/vigência)")
         print("  [S] Sair / Concluir")
 
         escolha = input("\nEscolha o tipo [1-4] ou S para concluir: ").strip().upper()
@@ -82,15 +81,40 @@ def obter_parametros_financeiros() -> ParametrosFinanceiros:
 
         tipo_selecionado = tipos_map[escolha]
 
-        descricao = input(f"Descrição do custo (ex: 'Salário Instrutor', 'Material'): ").strip()
+        # Seleção de Escopo (Global ou Projeto)
+        projeto_selecionado = None
+        print("\nEscopo do Custo:")
+        print("  [G] GLOBAL (Aplica a todos os projetos/turmas)")
+        if projetos_disponiveis:
+            for idx, p in enumerate(projetos_disponiveis, 1):
+                print(f"  [{idx}] Projeto: {p.nome}")
+
+        escopo = input("Escolha o escopo [G ou número do projeto]: ").strip().upper()
+
+        if escopo != 'G':
+            try:
+                idx_proj = int(escopo) - 1
+                if 0 <= idx_proj < len(projetos_disponiveis):
+                    projeto_selecionado = projetos_disponiveis[idx_proj].nome
+                    print(f"   -> Selecionado: {projeto_selecionado}")
+                else:
+                    print("[!] Projeto inválido. Definindo como GLOBAL.")
+            except ValueError:
+                print("[!] Opção inválida. Definindo como GLOBAL.")
+        else:
+            print("   -> Selecionado: GLOBAL")
+
+        descricao = input(f"Descrição do custo (ex: 'Salário', 'Licença SW'): ").strip()
         if not descricao:
             print("[!] Descrição obrigatória.")
             continue
 
         valor = _obter_float_usuario(f"Valor do custo (R$): ", None, 0.0, 1000000.0, "Valor")
 
-        params_fin.adicionar_custo(tipo_selecionado, descricao, valor)
-        print(f"[✓] Custo adicionado: {tipo_selecionado} - {descricao} - R$ {valor:.2f}")
+        params_fin.adicionar_custo(tipo_selecionado, descricao, valor, projeto_selecionado)
+
+        escopo_str = f"PROJETO {projeto_selecionado}" if projeto_selecionado else "GLOBAL"
+        print(f"[✓] Adicionado: [{escopo_str}] {tipo_selecionado} - {descricao} - R$ {valor:.2f}")
 
     print(f"\n[✓] Configuração financeira concluída. Total de itens: {len(params_fin.itens_custo)}")
     return params_fin

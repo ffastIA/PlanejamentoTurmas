@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Dict, Any, Optional
 from collections import defaultdict
 import pandas as pd
 import numpy as np
@@ -161,58 +161,66 @@ def analisar_distribuicao_instrutores_por_projeto(atribuicoes: List[Dict]) -> Di
 def calcular_fluxo_caixa_detalhado(atribuicoes: List[Dict],
                                    meses: List[str],
                                    meses_ferias_idx: List[int],
-                                   parametros_financeiros: ParametrosFinanceiros) -> pd.DataFrame:
+                                   parametros_financeiros: ParametrosFinanceiros,
+                                   projeto_filtro: Optional[str] = None) -> pd.DataFrame:
     """
-    Calcula o fluxo de caixa detalhado baseado nos 4 tipos de custos.
-    Retorna um DataFrame com o custo total mês a mês.
+    Calcula o fluxo de caixa detalhado.
+
+    Args:
+        projeto_filtro: Se fornecido, calcula apenas para o projeto especificado.
+                        Se None, calcula o consolidado (Global + Soma dos Projetos).
     """
     num_meses = len(meses)
-    # Inicializa array de custos por mês
     custos_mensais = np.zeros(num_meses)
 
-    # Se não houver custos configurados, retorna vazio
     if not parametros_financeiros or not parametros_financeiros.itens_custo:
         return pd.DataFrame()
 
-    # 1. Processar Custos PERMANENTES (Independente de turmas)
-    # Aplica-se a todos os meses da vigência do projeto (assumindo vigência = lista de meses gerada)
+    # 1. Processar Custos PERMANENTES
     for item in parametros_financeiros.itens_custo:
         if item.tipo == 'PERMANENTE':
-            custos_mensais += item.valor
+            # Se estamos filtrando por projeto, só soma se o custo for desse projeto
+            if projeto_filtro:
+                if item.projeto == projeto_filtro:
+                    custos_mensais += item.valor
+            # Se estamos no consolidado (None), soma tudo (Global + Específicos)
+            else:
+                custos_mensais += item.valor
 
     # 2. Processar Custos Vinculados a Turmas (INICIAL, ENCERRAMENTO, EXECUCAO)
     for atr in atribuicoes:
         t = atr['turma']
+        nome_projeto_turma = t.projeto.split('_Onda')[0]
 
-        # Identificar meses academicamente ativos
-        meses_academicos = calcular_meses_ativos(t.mes_inicio, t.duracao, meses_ferias_idx, num_meses)
-
-        if not meses_academicos:
+        # Filtro de Projeto
+        if projeto_filtro and nome_projeto_turma != projeto_filtro:
             continue
 
-        mes_inicio_real = meses_academicos[0]
-        mes_fim_real = meses_academicos[-1]  # Último mês de aula
+        meses_academicos = calcular_meses_ativos(t.mes_inicio, t.duracao, meses_ferias_idx, num_meses)
+        if not meses_academicos: continue
 
-        # Definição do período de EXECUÇÃO (Calendário corrido, inclui férias)
-        # Vai do mês de início até o mês de término, inclusive
+        mes_inicio_real = meses_academicos[0]
+        mes_fim_real = meses_academicos[-1]
         periodo_execucao = range(mes_inicio_real, min(mes_fim_real + 1, num_meses))
 
         for item in parametros_financeiros.itens_custo:
+            # Verifica se o custo se aplica a esta turma (Global ou Mesmo Projeto)
+            aplica_custo = False
+            if item.projeto is None:  # Global
+                aplica_custo = True
+            elif item.projeto == nome_projeto_turma:  # Específico
+                aplica_custo = True
+
+            if not aplica_custo:
+                continue
+
             if item.tipo == 'INICIAL':
-                # Aplica apenas no mês de início
-                if mes_inicio_real < num_meses:
-                    custos_mensais[mes_inicio_real] += item.valor
-
+                if mes_inicio_real < num_meses: custos_mensais[mes_inicio_real] += item.valor
             elif item.tipo == 'ENCERRAMENTO':
-                # Aplica apenas no mês de término
-                if mes_fim_real < num_meses:
-                    custos_mensais[mes_fim_real] += item.valor
-
+                if mes_fim_real < num_meses: custos_mensais[mes_fim_real] += item.valor
             elif item.tipo == 'EXECUCAO':
-                # Aplica em todos os meses do período de execução (incluindo férias)
                 for m in periodo_execucao:
-                    if m < num_meses:
-                        custos_mensais[m] += item.valor
+                    if m < num_meses: custos_mensais[m] += item.valor
 
     # Montar DataFrame
     dados = []
