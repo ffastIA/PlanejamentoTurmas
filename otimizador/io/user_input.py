@@ -16,10 +16,11 @@ def obter_parametros_usuario() -> ParametrosOtimizacao:
     print("(Digite 'sair' para cancelar)\n")
 
     try:
-        capacidade_max = _obter_int_usuario("Capacidade máxima de turmas por instrutor/mês [padrão: 8]: ", 8, 1, 20,
+        capacidade_max = _obter_int_usuario("Capacidade máxima de turmas por instrutor/mês [padrão: 6]: ", 6, 1, 20,
                                             "Capacidade")
-        spread_maximo = _obter_int_usuario("Spread máximo permitido entre instrutores [padrão: 16]: ", 16, 0, 50,
+        spread_maximo = _obter_int_usuario("Spread máximo permitido entre instrutores [padrão: 4]: ", 4, 0, 50,
                                            "Spread Máximo")
+
         timeout = _obter_int_usuario("Timeout do solver em segundos [padrão: 180]: ", 180, 10, 3600, "Timeout")
         peso_instrutores = _obter_int_usuario("Peso minimização instrutores [padrão: 10000]: ", 10000, 1, 100000,
                                               "Peso Instrutores")
@@ -58,7 +59,8 @@ def obter_parametros_financeiros(projetos_disponiveis: List[ConfiguracaoProjeto]
         '1': 'INICIAL',
         '2': 'ENCERRAMENTO',
         '3': 'EXECUCAO',
-        '4': 'PERMANENTE'
+        '4': 'PERMANENTE',
+        '5': 'INSTRUTOR'  # NOVO TIPO
     }
 
     while True:
@@ -66,11 +68,12 @@ def obter_parametros_financeiros(projetos_disponiveis: List[ConfiguracaoProjeto]
         print("Tipos disponíveis:")
         print("  [1] INICIAL      (Início da turma)")
         print("  [2] ENCERRAMENTO (Final da turma)")
-        print("  [3] EXECUÇÃO     (Mensal durante a turma)")
-        print("  [4] PERMANENTE   (Mensal durante todo o projeto/vigência)")
+        print("  [3] EXECUÇÃO     (Mensal durante a turma - ex: material)")
+        print("  [4] PERMANENTE   (Mensal durante todo o projeto - ex: gestão)")
+        print("  [5] INSTRUTOR    (Mensal x Qtd Instrutores Ativos)")  # NOVO
         print("  [S] Sair / Concluir")
 
-        escolha = input("\nEscolha o tipo [1-4] ou S para concluir: ").strip().upper()
+        escolha = input("\nEscolha o tipo [1-5] ou S para concluir: ").strip().upper()
 
         if escolha == 'S':
             break
@@ -104,12 +107,13 @@ def obter_parametros_financeiros(projetos_disponiveis: List[ConfiguracaoProjeto]
         else:
             print("   -> Selecionado: GLOBAL")
 
-        descricao = input(f"Descrição do custo (ex: 'Salário', 'Licença SW'): ").strip()
+        label_valor = "Valor Mensal por Instrutor (R$): " if tipo_selecionado == 'INSTRUTOR' else "Valor do custo (R$): "
+        descricao = input(f"Descrição do custo (ex: 'Salário Base', 'Ajuda de Custo'): ").strip()
         if not descricao:
             print("[!] Descrição obrigatória.")
             continue
 
-        valor = _obter_float_usuario(f"Valor do custo (R$): ", None, 0.0, 1000000.0, "Valor")
+        valor = _obter_float_usuario(label_valor, None, 0.0, 1000000.0, "Valor")
 
         params_fin.adicionar_custo(tipo_selecionado, descricao, valor, projeto_selecionado)
 
@@ -215,9 +219,20 @@ def _configurar_projeto_interativo(projeto_existente: Optional[ConfiguracaoProje
             f"Percentual PROG (%) [{projeto_existente.percentual_prog if is_editing else 60}]: ",
             projeto_existente.percentual_prog if is_editing else 60.0, 0.0, 100.0, "Percentual PROG")
 
-        projeto = ConfiguracaoProjeto(nome=nome, data_inicio=data_inicio_str, data_termino=data_termino_str,
-                                      num_turmas=num_turmas, duracao_curso=duracao_curso, ondas=ondas,
-                                      percentual_prog=perc_prog)
+        min_turmas = _obter_int_usuario(
+            f"Mínimo de turmas ativas/mês (exceto férias) [{projeto_existente.turmas_min_por_mes if is_editing else 1}]: ",
+            projeto_existente.turmas_min_por_mes if is_editing else 1, 0, 100, "Mínimo Turmas")
+
+        projeto = ConfiguracaoProjeto(
+            nome=nome,
+            data_inicio=data_inicio_str,
+            data_termino=data_termino_str,
+            num_turmas=num_turmas,
+            duracao_curso=duracao_curso,
+            ondas=ondas,
+            percentual_prog=perc_prog,
+            turmas_min_por_mes=min_turmas
+        )
         confirma = input("\nConfirmar? (S/N) [S]: ").strip().upper()
         return projeto if confirma in ('', 'S') else None
     except (KeyboardInterrupt, TypeError, ValueError) as e:
@@ -257,9 +272,9 @@ def _confirmar_configuracao(projetos: List[ConfiguracaoProjeto]) -> bool:
 
 def _obter_projetos_padrao() -> List[ConfiguracaoProjeto]:
     return [
-        ConfiguracaoProjeto('DD1', '15/01/2026', '31/03/2026', 8, 2, 1, 100.0),
-        ConfiguracaoProjeto('DD2', '01/04/2026', '31/03/2027', 110, 4, 2, 60.0),
-        ConfiguracaoProjeto('IdearTec', '01/04/2026', '31/03/2027', 110, 4, 2, 50.0)
+        ConfiguracaoProjeto('DD1', '15/01/2026', '31/03/2026', 8, 2, 1, 100.0, turmas_min_por_mes=1),
+        ConfiguracaoProjeto('DD2', '01/04/2026', '31/03/2027', 110, 4, 2, 60.0, turmas_min_por_mes=1),
+        ConfiguracaoProjeto('IdearTec', '01/04/2026', '31/03/2027', 110, 4, 2, 50.0, turmas_min_por_mes=1)
     ]
 
 
@@ -309,4 +324,5 @@ def exibir_resumo_projetos(projetos: List[ConfiguracaoProjeto]):
     if not projetos: print("  Nenhum projeto."); return
     for p in projetos:
         print(f"\n  {p.nome}: {p.num_turmas} turmas, {p.duracao_curso} meses, {p.data_inicio}-{p.data_termino}")
+        print(f"    Mínimo/mês: {p.turmas_min_por_mes} (exceto férias)")
     print(f"\n  TOTAL: {sum(p.num_turmas for p in projetos)} turmas.")

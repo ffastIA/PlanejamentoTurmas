@@ -1,137 +1,141 @@
-# ARQUIVO: otimizador/core/stage_1.py
-
-from collections import defaultdict
-from typing import List, Dict, Optional
-from ortools.sat.python import cp_model
-import time  # <<< ALTERAÇÃO >>>
-
-# Import relativo para acessar modelos de dados e utils
+from ortools.linear_solver import pywraplp
+from typing import List, Dict, Any
 from ..data_models import Projeto, ParametrosOtimizacao
 from ..utils import calcular_meses_ativos
 
 
-# <<< ALTERAÇÃO: INÍCIO DA DEFINIÇÃO DO CALLBACK >>>
-class Stage1Callback(cp_model.CpSolverSolutionCallback):
-    """Callback para monitorar o progresso da otimização do Estágio 1."""
+def otimizar_curva_demanda(projetos: List[Projeto], meses: List[str], parametros: ParametrosOtimizacao) -> Dict[
+    str, Any]:
+    """
+    Estágio 1: Otimiza o cronograma de início das turmas.
+    Objetivo: Nivelar a demanda mensal e respeitar restrições de tempo e mínimo de atividade.
+    """
+    print("\nIniciando Solver (SCIP)...")
+    solver = pywraplp.Solver.CreateSolver('SCIP')
+    if not solver:
+        print("[ERRO] Solver SCIP não encontrado.")
+        return None
 
-    def __init__(self, pico_prog_var, pico_rob_var):
-        cp_model.CpSolverSolutionCallback.__init__(self)
-        self.__pico_prog = pico_prog_var
-        self.__pico_rob = pico_rob_var
-        self.__solution_count = 0
-        self.__start_time = time.time()
-        print("\n[Callback] Monitorando o progresso da otimização do Estágio 1...")
-
-    def on_solution_callback(self):
-        """Chamado pelo solver a cada nova solução encontrada."""
-        current_time = time.time()
-        pico_prog_val = self.Value(self.__pico_prog)
-        pico_rob_val = self.Value(self.__pico_rob)
-
-        self.__solution_count += 1
-
-        print(f"  > Sol. #{self.__solution_count} "
-              f"({current_time - self.__start_time:.2f}s) | "
-              f"Pico PROG: {pico_prog_val}, "
-              f"Pico ROB: {pico_rob_val} | "
-              f"Objetivo: {self.ObjectiveValue():.0f}")
-
-    def solution_count(self):
-        return self.__solution_count
-
-
-# <<< ALTERAÇÃO: FIM DA DEFINIÇÃO DO CALLBACK >>>
-
-
-def otimizar_curva_demanda(projetos_flexiveis: List[Projeto],
-                           meses: List[str],
-                           parametros: ParametrosOtimizacao) -> Optional[Dict]:
-    """Otimiza o cronograma de início das turmas minimizando pico de demanda."""
-    print("\n" + "=" * 80 + "\nESTÁGIO 1: Otimização da Curva de Demanda\n" + "=" * 80)
-    model = cp_model.CpModel()
+    solver.SetTimeLimit(parametros.timeout_segundos * 1000)
     num_meses = len(meses)
-    meses_ferias_idx = [meses.index(m) for m in parametros.meses_ferias if m in meses]
 
-    # --- Variáveis de Decisão (Início das turmas) ---
-    inicio_vars_prog, inicio_vars_rob = {}, {}
-    for proj in projetos_flexiveis:
-        for m in range(proj.inicio_min, proj.inicio_max + 1):
-            if proj.prog > 0: inicio_vars_prog[(proj.nome, m)] = model.NewIntVar(0, proj.prog, f'p_{proj.nome}_{m}')
-            if proj.rob > 0: inicio_vars_rob[(proj.nome, m)] = model.NewIntVar(0, proj.rob, f'r_{proj.nome}_{m}')
+    # Variáveis: x[i, j] = número de turmas do projeto i começando no mês j
+    x = {}
+    for i, proj in enumerate(projetos):
+        for j in range(num_meses):
+            x[i, j] = solver.IntVar(0, proj.prog + proj.rob, f'x_{i}_{j}')
 
-    # --- Restrição 1: Total de Turmas por Projeto ---
-    for proj in projetos_flexiveis:
-        if proj.prog > 0: model.Add(sum(
-            inicio_vars_prog.get((proj.nome, m), 0) for m in range(proj.inicio_min, proj.inicio_max + 1)) == proj.prog)
-        if proj.rob > 0: model.Add(sum(
-            inicio_vars_rob.get((proj.nome, m), 0) for m in range(proj.inicio_min, proj.inicio_max + 1)) == proj.rob)
+    # Variável de pico (para minimizar o máximo)
+    z = solver.IntVar(0, parametros.pico_maximo_turmas, 'z')
 
-    # --- Restrição 2: Proibir INÍCIO de turmas nas férias ---
-    for mes_ferias in meses_ferias_idx:
-        for proj in projetos_flexiveis:
-            if proj.prog > 0 and (proj.nome, mes_ferias) in inicio_vars_prog:
-                model.Add(inicio_vars_prog[(proj.nome, mes_ferias)] == 0)
-            if proj.rob > 0 and (proj.nome, mes_ferias) in inicio_vars_rob:
-                model.Add(inicio_vars_rob[(proj.nome, mes_ferias)] == 0)
+    # Restrição 1: Total de turmas deve ser cumprido
+    for i, proj in enumerate(projetos):
+        solver.Add(solver.Sum([x[i, j] for j in range(num_meses)]) == (proj.prog + proj.rob))
 
-    # --- Restrição 3: Cálculo da Demanda usando a nova lógica de "pulo" ---
-    demanda_total_prog, demanda_total_rob = {}, {}
+    # Restrição 2: Janela de início permitida
+    for i, proj in enumerate(projetos):
+        for j in range(num_meses):
+            if j < proj.inicio_min or j > proj.inicio_max:
+                solver.Add(x[i, j] == 0)
+
+    # Restrição 3: Cálculo de demanda mensal e Limite de Pico
+    demanda_mensal = [[] for _ in range(num_meses)]
+
+    for i, proj in enumerate(projetos):
+        for start_month in range(num_meses):
+            # Se uma turma começa em 'start_month', em quais meses ela estará ativa?
+            meses_ativos = calcular_meses_ativos(start_month, proj.duracao, parametros.meses_ferias, num_meses)
+
+            for m_ativo in meses_ativos:
+                demanda_mensal[m_ativo].append(x[i, start_month])
+
     for m in range(num_meses):
-        demanda_m_prog_list = [
-            inicio_vars_prog[(p.nome, m_i)]
-            for p in projetos_flexiveis if p.prog > 0
-            for m_i in range(p.inicio_min, p.inicio_max + 1)
-            if m in calcular_meses_ativos(m_i, p.duracao, meses_ferias_idx, num_meses)
-        ]
-        demanda_m_rob_list = [
-            inicio_vars_rob[(p.nome, m_i)]
-            for p in projetos_flexiveis if p.rob > 0
-            for m_i in range(p.inicio_min, p.inicio_max + 1)
-            if m in calcular_meses_ativos(m_i, p.duracao, meses_ferias_idx, num_meses)
-        ]
-        demanda_total_prog[m] = model.NewIntVar(0, 300, f'dt_prog_{m}')
-        demanda_total_rob[m] = model.NewIntVar(0, 300, f'dt_rob_{m}')
-        model.Add(demanda_total_prog[m] == sum(demanda_m_prog_list))
-        model.Add(demanda_total_rob[m] == sum(demanda_m_rob_list))
+        if demanda_mensal[m]:
+            solver.Add(solver.Sum(demanda_mensal[m]) <= z)
 
-    # --- Definição do Objetivo e Resolução ---
-    pico_prog = model.NewIntVar(0, 300, 'pico_prog')
-    pico_rob = model.NewIntVar(0, 300, 'pico_rob')
-    pico_consolidado_total = parametros.pico_maximo_turmas
-    for m in range(num_meses):
-        model.Add(demanda_total_prog[m] + demanda_total_rob[m] <= pico_consolidado_total)
+    # --- NOVA RESTRIÇÃO: MÍNIMO DE TURMAS POR MÊS (EXCETO FÉRIAS) ---
+    print("Aplicando restrições de mínimo mensal...")
 
-    model.AddMaxEquality(pico_prog, list(demanda_total_prog.values()))
-    model.AddMaxEquality(pico_rob, list(demanda_total_rob.values()))
-    model.Minimize(pico_prog + pico_rob)
+    for i, proj in enumerate(projetos):
+        # Acesso seguro ao atributo min_turmas (caso namedtuple antigo esteja em cache)
+        min_turmas = getattr(proj, 'min_turmas', 0)
 
-    # --- Resolução do Modelo ---
-    solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = float(parametros.timeout_segundos)
+        if min_turmas <= 0:
+            continue
 
-    # <<< ALTERAÇÃO: INSTANCIAR E USAR O CALLBACK >>>
-    callback = Stage1Callback(pico_prog, pico_rob)
-    status = solver.Solve(model, callback)
+        # Identificar intervalo de vigência do projeto
+        for m in range(proj.inicio_min, proj.mes_fim_projeto + 1):
+            if m >= num_meses: break
 
-    if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        print(f"\n[✓] SUCESSO! Status: {solver.StatusName(status)}")
-        cronograma_flexivel = defaultdict(list)
-        for proj in projetos_flexiveis:
-            for hab_flag, vars_dict, hab_nome in [('prog', inicio_vars_prog, 'PROG'), ('rob', inicio_vars_rob, 'ROB')]:
-                if getattr(proj, hab_flag) > 0:
-                    for m in range(proj.inicio_min, proj.inicio_max + 1):
-                        num_turmas = solver.Value(vars_dict.get((proj.nome, m), 0))
-                        if num_turmas > 0:
-                            cronograma_flexivel[proj.nome].append(
-                                {'mes_inicio': m, 'num_turmas': num_turmas, 'habilidade': hab_nome})
+            # EXCEÇÃO: Se for mês de férias, não aplica mínimo
+            mes_nome = meses[m]
+            is_ferias = False
+            for ferias_mes in parametros.meses_ferias:
+                if ferias_mes == mes_nome:
+                    is_ferias = True
+                    break
+
+            if is_ferias:
+                continue
+
+            # Calcular quantas turmas deste projeto estão ativas no mês 'm'
+            vars_ativas_no_mes = []
+
+            start_range_min = max(0, m - proj.duracao * 2)
+            start_range_max = m + 1
+
+            for s in range(start_range_min, start_range_max):
+                meses_ativos_da_turma = calcular_meses_ativos(s, proj.duracao, parametros.meses_ferias, num_meses)
+                if m in meses_ativos_da_turma:
+                    vars_ativas_no_mes.append(x[i, s])
+
+            if vars_ativas_no_mes:
+                # Aplica a restrição: Soma das ativas >= Mínimo Configurado
+                solver.Add(solver.Sum(vars_ativas_no_mes) >= min_turmas)
+
+    # Função Objetivo: Minimizar Pico (z)
+    solver.Minimize(z)
+
+    print("Resolvendo...")
+    status = solver.Solve()
+
+    if status in [pywraplp.Solver.OPTIMAL, pywraplp.Solver.FEASIBLE]:
+        print("Solução encontrada!")
+        cronograma = []
+        for i, proj in enumerate(projetos):
+            for j in range(num_meses):
+                qtd = int(x[i, j].solution_value())
+                if qtd > 0:
+                    cronograma.append({
+                        'projeto_idx': i,
+                        'projeto_nome': proj.nome,
+                        'mes_inicio': j,
+                        'qtd': qtd,
+                        'duracao': proj.duracao,
+                        'habilidade': 'MISTA'
+                    })
+
+        demanda_final = [0] * num_meses
+        for m in range(num_meses):
+            val = 0
+            for item in demanda_mensal[m]:
+                val += int(item.solution_value())
+            demanda_final[m] = val
+
         return {
-            "cronograma": dict(cronograma_flexivel),
-            "pico_max": solver.Value(pico_prog) + solver.Value(pico_rob),
-            "pico_prog": solver.Value(pico_prog),
-            "pico_rob": solver.Value(pico_rob),
-            "meses_ferias": meses_ferias_idx,
-            "parametros": parametros
+            'status': 'otimo',
+            'cronograma': cronograma,
+            'pico_max': int(z.solution_value()),
+            'demanda_mensal': demanda_final,
+            'meses_ferias': [meses.index(m) for m in parametros.meses_ferias if m in meses]
         }
     else:
-        print(f"\n[✗] FALHA: Status {solver.StatusName(status)}")
+        print("\n" + "!" * 60)
+        print("[ERRO CRÍTICO] Otimização INVIÁVEL (Infeasible).")
+        print("As restrições configuradas são matematicamente impossíveis de atender.")
+        print(
+            "Dica: Verifique se o 'Mínimo de turmas por mês' não é alto demais para o 'Número total de turmas' e a 'Duração'.")
+        print(
+            "Exemplo: Se você tem 8 turmas de 2 meses, você tem estoque para cobrir apenas 16 meses. Se o projeto dura 3 meses e exige 8 por mês, precisaria de 24 meses de estoque.")
+        print("!" * 60 + "\n")
         return None

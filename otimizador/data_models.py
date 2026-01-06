@@ -4,9 +4,10 @@ from datetime import datetime
 from typing import List, Optional
 
 # Estruturas de dados para a lógica do otimizador
+# ADICIONADO CAMPO 'min_turmas' AQUI
 Projeto = namedtuple('Projeto', [
     'nome', 'prog', 'rob', 'duracao',
-    'inicio_min', 'inicio_max', 'mes_fim_projeto'
+    'inicio_min', 'inicio_max', 'mes_fim_projeto', 'min_turmas'
 ])
 
 Instrutor = namedtuple('Instrutor', [
@@ -30,7 +31,7 @@ class ConfiguracaoProjeto:
     duracao_curso: int
     ondas: int = 1
     percentual_prog: float = 60.0
-    turmas_min_por_mes: int = 1
+    turmas_min_por_mes: int = 1 # Default mantido como 1 para segurança, mas editável
 
     # Campos calculados
     mes_inicio_idx: int = field(default=None, init=False)
@@ -69,8 +70,9 @@ class ParametrosOtimizacao:
     """
     Parâmetros globais para otimização.
     """
-    capacidade_max_instrutor: int = 8
-    spread_maximo: int = 16
+    # NOVOS DEFAULTS AQUI
+    capacidade_max_instrutor: int = 6  # Alterado de 8 para 6
+    spread_maximo: int = 4             # Alterado de 16 para 4
     meses_ferias: List[str] = field(default_factory=lambda: ['Jul/26', 'Dez/26'])
     timeout_segundos: int = 180
 
@@ -100,10 +102,10 @@ class ParametrosOtimizacao:
 @dataclass
 class ItemCusto:
     """Representa um item de custo individual."""
-    tipo: str  # 'INICIAL', 'ENCERRAMENTO', 'EXECUCAO', 'PERMANENTE'
+    tipo: str
     descricao: str
     valor: float
-    projeto: Optional[str] = None  # None = Global, String = Nome do Projeto
+    projeto: Optional[str] = None
 
 @dataclass
 class ParametrosFinanceiros:

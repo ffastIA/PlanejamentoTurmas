@@ -1,6 +1,6 @@
 """
 Sistema de Otimização de Alocação de Instrutores
-Versão 3.2 - Gráficos Individuais e Consolidados
+Versão 3.3 - Evolução de Equipe e Melhorias
 Autor: Sistema Idear
 """
 
@@ -25,7 +25,7 @@ from otimizador.data_models import ParametrosFinanceiros
 def main():
     print("=" * 80)
     print("SISTEMA DE OTIMIZAÇÃO DE ALOCAÇÃO DE INSTRUTORES")
-    print("Versão 3.2 (Correção de Gráficos)")
+    print("Versão 3.3 (Evolução de Equipe)")
     print("=" * 80)
 
     try:
@@ -96,7 +96,6 @@ def main():
         print("2. Gráficos Operacionais...")
         graficos = {}
 
-        # 2.1 Cronograma Consolidado
         try:
             graficos['cronograma_consolidado'] = plotting.gerar_grafico_turmas_projeto_mes(
                 resultados_estagio2['turmas'], projetos_modelo, meses, meses_ferias_idx, projeto_filtro=None
@@ -105,7 +104,6 @@ def main():
         except Exception as e:
             print(f"  ⚠ Erro Cronograma Consolidado: {e}")
 
-        # 2.2 Cronograma Individual por Projeto (NOVO)
         for proj in projetos_config:
             try:
                 path = plotting.gerar_grafico_turmas_projeto_mes(
@@ -116,7 +114,6 @@ def main():
             except Exception as e:
                 print(f"  ⚠ Erro Cronograma {proj.nome}: {e}")
 
-        # Outros gráficos padrão
         try:
             graficos['instrutor_projeto'] = plotting.gerar_grafico_turmas_instrutor_tipologia_projeto(
                 resultados_estagio2['atribuicoes'])
@@ -140,6 +137,16 @@ def main():
         except Exception as e:
             pass
 
+        # NOVO GRÁFICO: Evolução de Instrutores
+        df_evolucao_instrutores = pd.DataFrame()
+        try:
+            graficos['evolucao_instrutores'], df_evolucao_instrutores = plotting.gerar_grafico_evolucao_instrutores(
+                resultados_estagio2['atribuicoes'], meses, meses_ferias_idx
+            )
+            print("  ✓ Gráfico Evolução Instrutores")
+        except Exception as e:
+            print(f"  ⚠ Erro Evolução Instrutores: {e}")
+
         if parametros_financeiros:
             print("3. Gráficos Financeiros...")
             try:
@@ -161,7 +168,8 @@ def main():
         pdf_generator.gerar_relatorio_pdf(
             projetos_config, resultados_estagio1, resultados_estagio2, graficos, serie_temporal_df,
             df_consolidada, contagem_instrutores_hab, distribuicao_por_projeto, parametros.pico_maximo_turmas,
-            parametros_financeiros
+            parametros_financeiros,
+            df_evolucao_instrutores  # Passando o novo DataFrame
         )
 
         print("5. Limpeza...")

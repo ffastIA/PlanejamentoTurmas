@@ -100,7 +100,7 @@ def converter_projetos_para_modelo(projetos_config: List[ConfiguracaoProjeto], m
         if config.ondas == 1:
             projetos_modelo.append(
                 Projeto(config.nome, prog_total, rob_total, config.duracao_curso, inicio_min, inicio_max,
-                        config.mes_termino_idx))
+                        config.mes_termino_idx, config.turmas_min_por_mes))
         else:
             prog_por_onda, rob_por_onda = prog_total // config.ondas, rob_total // config.ondas
             for onda_idx in range(config.ondas):
@@ -111,7 +111,7 @@ def converter_projetos_para_modelo(projetos_config: List[ConfiguracaoProjeto], m
                 nome_onda = f"{config.nome}_Onda{onda_idx + 1}"
                 projetos_modelo.append(
                     Projeto(nome_onda, prog_onda, rob_onda, config.duracao_curso, inicio_min, inicio_max,
-                            config.mes_termino_idx))
+                            config.mes_termino_idx, config.turmas_min_por_mes))
                 print(f"   - {nome_onda}: {prog_onda} PROG, {rob_onda} ROB")
     print("=" * 80)
     return projetos_modelo
@@ -163,36 +163,94 @@ def calcular_fluxo_caixa_detalhado(atribuicoes: List[Dict],
                                    meses_ferias_idx: List[int],
                                    parametros_financeiros: ParametrosFinanceiros,
                                    projeto_filtro: Optional[str] = None) -> pd.DataFrame:
-    """
-    Calcula o fluxo de caixa detalhado.
-
-    Args:
-        projeto_filtro: Se fornecido, calcula apenas para o projeto especificado.
-                        Se None, calcula o consolidado (Global + Soma dos Projetos).
-    """
+    """Calcula o fluxo de caixa detalhado."""
     num_meses = len(meses)
     custos_mensais = np.zeros(num_meses)
 
     if not parametros_financeiros or not parametros_financeiros.itens_custo:
         return pd.DataFrame()
 
+    # --- PRÉ-CÁLCULO: Instrutores Ativos por Mês ---
+    # Necessário para o cálculo do custo tipo 'INSTRUTOR'
+    # Se projeto_filtro estiver ativo, conta apenas instrutores com turmas naquele projeto naquele mês.
+    instrutores_ativos_no_mes = {m: set() for m in range(num_meses)}
+
+    for atr in atribuicoes:
+        t = atr['turma']
+        nome_projeto_turma = t.projeto.split('_Onda')[0]
+
+        # Se estamos filtrando por projeto, ignoramos turmas de outros projetos
+        if projeto_filtro and nome_projeto_turma != projeto_filtro:
+            continue
+
+        meses_ativos = calcular_meses_ativos(t.mes_inicio, t.duracao, meses_ferias_idx, num_meses)
+        for m in meses_ativos:
+            instrutores_ativos_no_mes[m].add(atr['instrutor'].id)
+
+    # ------------------------------------------------
+
     # 1. Processar Custos PERMANENTES
     for item in parametros_financeiros.itens_custo:
         if item.tipo == 'PERMANENTE':
-            # Se estamos filtrando por projeto, só soma se o custo for desse projeto
             if projeto_filtro:
                 if item.projeto == projeto_filtro:
                     custos_mensais += item.valor
-            # Se estamos no consolidado (None), soma tudo (Global + Específicos)
             else:
                 custos_mensais += item.valor
+
+        # --- NOVO: Custo Tipo INSTRUTOR ---
+        elif item.tipo == 'INSTRUTOR':
+            aplica_custo = False
+            if item.projeto is None:
+                aplica_custo = True  # Custo global de instrutor
+            elif projeto_filtro and item.projeto == projeto_filtro:
+                aplica_custo = True  # Custo específico deste projeto
+            elif not projeto_filtro and item.projeto:  # Custo específico no consolidado
+                # No consolidado, precisamos verificar se o instrutor trabalhou NESTE projeto específico
+                # A lógica simplificada acima (instrutores_ativos_no_mes) conta instrutores globais ou do filtro.
+                # Para custo de instrutor específico no consolidado, precisaríamos de uma contagem mais granular.
+                # Assumindo simplificação: Se é consolidado, somamos tudo.
+                aplica_custo = True
+
+            if aplica_custo:
+                # Se for um custo específico de projeto rodando no consolidado,
+                # precisamos recalcular os ativos APENAS daquele projeto para multiplicar pelo valor correto.
+                # Para evitar complexidade excessiva O(N^3), assumiremos que custos de instrutor
+                # geralmente são globais ou o filtro já resolveu.
+
+                # Aplicação direta:
+                if projeto_filtro:
+                    # Estamos vendo um projeto só. A contagem 'instrutores_ativos_no_mes' já está filtrada.
+                    if item.projeto is None or item.projeto == projeto_filtro:
+                        for m in range(num_meses):
+                            qtd_ativos = len(instrutores_ativos_no_mes[m])
+                            custos_mensais[m] += qtd_ativos * item.valor
+                else:
+                    # Estamos no consolidado.
+                    # Se o custo é GLOBAL, aplica sobre o total de instrutores únicos do mês.
+                    if item.projeto is None:
+                        for m in range(num_meses):
+                            qtd_ativos = len(instrutores_ativos_no_mes[m])
+                            custos_mensais[m] += qtd_ativos * item.valor
+                    else:
+                        # Se o custo é ESPECÍFICO (ex: "Instrutor Projeto A" tem valor diferente),
+                        # precisamos contar quantos instrutores estão ativos NO PROJETO A neste mês.
+                        # Recalculo rápido local:
+                        ativos_proj_especifico = {m: set() for m in range(num_meses)}
+                        for atr in atribuicoes:
+                            if atr['turma'].projeto.split('_Onda')[0] == item.projeto:
+                                for m in calcular_meses_ativos(atr['turma'].mes_inicio, atr['turma'].duracao,
+                                                               meses_ferias_idx, num_meses):
+                                    ativos_proj_especifico[m].add(atr['instrutor'].id)
+
+                        for m in range(num_meses):
+                            custos_mensais[m] += len(ativos_proj_especifico[m]) * item.valor
 
     # 2. Processar Custos Vinculados a Turmas (INICIAL, ENCERRAMENTO, EXECUCAO)
     for atr in atribuicoes:
         t = atr['turma']
         nome_projeto_turma = t.projeto.split('_Onda')[0]
 
-        # Filtro de Projeto
         if projeto_filtro and nome_projeto_turma != projeto_filtro:
             continue
 
@@ -204,15 +262,13 @@ def calcular_fluxo_caixa_detalhado(atribuicoes: List[Dict],
         periodo_execucao = range(mes_inicio_real, min(mes_fim_real + 1, num_meses))
 
         for item in parametros_financeiros.itens_custo:
-            # Verifica se o custo se aplica a esta turma (Global ou Mesmo Projeto)
             aplica_custo = False
-            if item.projeto is None:  # Global
+            if item.projeto is None:
                 aplica_custo = True
-            elif item.projeto == nome_projeto_turma:  # Específico
+            elif item.projeto == nome_projeto_turma:
                 aplica_custo = True
 
-            if not aplica_custo:
-                continue
+            if not aplica_custo: continue
 
             if item.tipo == 'INICIAL':
                 if mes_inicio_real < num_meses: custos_mensais[mes_inicio_real] += item.valor
@@ -222,7 +278,6 @@ def calcular_fluxo_caixa_detalhado(atribuicoes: List[Dict],
                 for m in periodo_execucao:
                     if m < num_meses: custos_mensais[m] += item.valor
 
-    # Montar DataFrame
     dados = []
     acumulado = 0.0
     for idx, mes in enumerate(meses):
@@ -232,6 +287,42 @@ def calcular_fluxo_caixa_detalhado(atribuicoes: List[Dict],
             'Mês': mes,
             'Custo Mensal': valor_mes,
             'Custo Acumulado': acumulado
+        })
+
+    return pd.DataFrame(dados)
+
+
+def calcular_evolucao_instrutores(atribuicoes: List[Dict], meses: List[str],
+                                  meses_ferias_idx: List[int]) -> pd.DataFrame:
+    """
+    Calcula a quantidade de instrutores únicos ativos por mês, separados por tipologia.
+    """
+    num_meses = len(meses)
+
+    # Estrutura: {mes_idx: {'PROG': {id1, id2}, 'ROBOTICA': {id3}}}
+    instrutores_ativos = {m: defaultdict(set) for m in range(num_meses)}
+
+    for atr in atribuicoes:
+        t = atr['turma']
+        i = atr['instrutor']
+
+        # Identificar meses em que esta turma está ativa
+        meses_ativos = calcular_meses_ativos(t.mes_inicio, t.duracao, meses_ferias_idx, num_meses)
+
+        for m in meses_ativos:
+            instrutores_ativos[m][i.habilidade].add(i.id)
+
+    # Montar DataFrame
+    dados = []
+    for m_idx, mes_nome in enumerate(meses):
+        qtd_prog = len(instrutores_ativos[m_idx].get('PROG', set()))
+        qtd_rob = len(instrutores_ativos[m_idx].get('ROBOTICA', set()))
+
+        dados.append({
+            'Mes': mes_nome,
+            'Instrutores_PROG': qtd_prog,
+            'Instrutores_ROB': qtd_rob,
+            'Total': qtd_prog + qtd_rob
         })
 
     return pd.DataFrame(dados)

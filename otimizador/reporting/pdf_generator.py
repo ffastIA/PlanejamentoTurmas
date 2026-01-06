@@ -66,7 +66,9 @@ def gerar_relatorio_pdf(projetos_config: List[ConfiguracaoProjeto],
                         contagem_instrutores_hab: Dict,
                         distribuicao_por_projeto: Dict,
                         pico_maximo_limite: int,
-                        parametros_financeiros: ParametrosFinanceiros = None):
+                        parametros_financeiros: ParametrosFinanceiros = None,
+                        df_evolucao_instrutores: pd.DataFrame = None):  # Novo parametro
+
     pdf = PDFRelatorio()
     pdf.alias_nb_pages()
     pdf.add_page()
@@ -190,10 +192,35 @@ def gerar_relatorio_pdf(projetos_config: List[ConfiguracaoProjeto],
     if graficos_paths.get('conclusoes'):
         pdf.add_image_centered(graficos_paths['conclusoes'], width=180)
 
-    # 6. FINANCEIRO
+    # --- NOVA SEÇÃO: EVOLUÇÃO MENSAL DA EQUIPE ---
+    if df_evolucao_instrutores is not None and not df_evolucao_instrutores.empty:
+        pdf.add_page()
+        pdf.chapter_title("6. Evolucao Mensal da Equipe")
+        pdf.chapter_body("Analise da quantidade de instrutores ativos por mes, segregados por tipologia.")
+
+        if graficos_paths.get('evolucao_instrutores'):
+            pdf.add_image_centered(graficos_paths['evolucao_instrutores'], width=180)
+
+        pdf.ln(5)
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(0, 8, "Tabela de Instrutores Ativos por Mes", 0, 1)
+
+        header = ['Mes', 'Instrutores PROG', 'Instrutores ROB', 'Total']
+        widths = [40, 45, 45, 30]
+        data = []
+        for _, row in df_evolucao_instrutores.iterrows():
+            data.append([
+                row['Mes'],
+                int(row['Instrutores_PROG']),
+                int(row['Instrutores_ROB']),
+                int(row['Total'])
+            ])
+        pdf.create_table(header, data, widths)
+
+    # 7. FINANCEIRO (Renumerado)
     if parametros_financeiros:
         pdf.add_page()
-        pdf.chapter_title("6. Analise Financeira e Fluxo de Caixa")
+        pdf.chapter_title("7. Analise Financeira e Fluxo de Caixa")
 
         pdf.set_font('Arial', 'B', 10)
         pdf.cell(0, 8, "Premissas de Custos Configuradas:", 0, 1)
@@ -204,9 +231,9 @@ def gerar_relatorio_pdf(projetos_config: List[ConfiguracaoProjeto],
             pdf.cell(0, 5, f"- {escopo} {item.tipo} - {item.descricao}: R$ {item.valor:,.2f}", 0, 1)
         pdf.ln(5)
 
-        # 6.1 Detalhamento por Projeto
+        # 7.1 Detalhamento por Projeto
         pdf.set_font('Arial', 'B', 12)
-        pdf.cell(0, 10, "6.1. Detalhamento por Projeto", 0, 1)
+        pdf.cell(0, 10, "7.1. Detalhamento por Projeto", 0, 1)
 
         meses = serie_temporal_df['Mes'].tolist()
 
@@ -236,9 +263,9 @@ def gerar_relatorio_pdf(projetos_config: List[ConfiguracaoProjeto],
                 pdf.create_table(['Mes', 'Custo Mensal', 'Acumulado'], data, [50, 60, 60])
                 pdf.ln(5)
 
-        # 6.2 Consolidado
+        # 7.2 Consolidado
         pdf.add_page()
-        pdf.chapter_title("6.2. Fluxo de Caixa CONSOLIDADO")
+        pdf.chapter_title("7.2. Fluxo de Caixa CONSOLIDADO")
         pdf.chapter_body("Visao total incluindo custos diretos dos projetos e custos globais/permanentes.")
 
         if graficos_paths.get('financeiro_consolidado'):
