@@ -1,190 +1,161 @@
-from ortools.linear_solver import pywraplp
-from collections import defaultdict
-import numpy as np
-from typing import List, Dict, Any
+"""
+Estágio 2: Alocação de Instrutores e Equilíbrio de Carga (Spread)
+Versão 4.4 - Correção de Inviabilidade e Spread por Tipologia (Soft)
+"""
 
-from ..data_models import Projeto, Instrutor, Turma, ParametrosOtimizacao
+from ortools.linear_solver import pywraplp
+from typing import List, Dict, Any
+from ..data_models import Projeto, Turma, Instrutor, ParametrosOtimizacao
 from ..utils import calcular_meses_ativos
 
 
-def otimizar_atribuicao_e_carga(cronograma_entrada: Any,
-                                projetos_modelo: List[Projeto],
+def otimizar_atribuicao_e_carga(cronograma_estagio1: List[Dict],
+                                projetos: List[Projeto],
                                 meses: List[str],
                                 meses_ferias_idx: List[int],
                                 parametros: ParametrosOtimizacao) -> Dict[str, Any]:
-    """
-    Estágio 2: Atribui instrutores às turmas definidas no Estágio 1.
-    Objetivo: Balancear carga e respeitar habilidades.
-    """
+    print("\n" + "=" * 80)
+    print("STAGE 2: ALOCAÇÃO DE INSTRUTORES E EQUILÍBRIO DE CARGA")
+    print("=" * 80)
 
-    # --- 1. PREPARAÇÃO DOS DADOS (CORREÇÃO DO ERRO) ---
-    # O Estágio 1 retorna uma lista plana. Convertendo para dicionário agrupado.
-    cronograma_agrupado = defaultdict(list)
-
-    if isinstance(cronograma_entrada, list):
-        for item in cronograma_entrada:
-            cronograma_agrupado[item['projeto_nome']].append(item)
-    else:
-        # Fallback caso venha como dicionário no futuro
-        cronograma_agrupado = cronograma_entrada
-
-    # Achatar todas as turmas para criar variáveis de decisão
-    todas_turmas = []
-    turma_counter = 0
-
-    # Mapeamento para saber qual projeto exige qual habilidade
-    for proj in projetos_modelo:
-        itens_cronograma = cronograma_agrupado.get(proj.nome, [])
-
-        # O Estágio 1 diz: "Começam X turmas em Jan".
-        # Precisamos decidir quantas são PROG e quantas são ROB.
-        # Heurística: Distribuir proporcionalmente à definição do projeto.
-
-        total_prog_necessario = proj.prog
-        total_rob_necessario = proj.rob
-
-        # Ordenar cronograma por mês para distribuição consistente
-        itens_cronograma.sort(key=lambda x: x['mes_inicio'])
-
-        prog_alocados = 0
-        rob_alocados = 0
-
-        for item in itens_cronograma:
-            qtd = item['qtd']
-            mes_inicio = item['mes_inicio']
-            duracao = item['duracao']
-
-            for _ in range(qtd):
-                # Decide habilidade da turma
-                if prog_alocados < total_prog_necessario:
-                    habilidade = 'PROG'
-                    prog_alocados += 1
-                else:
-                    habilidade = 'ROBOTICA'
-                    rob_alocados += 1
-
-                turma_obj = Turma(
-                    id=f"T{turma_counter}_{proj.nome}",
-                    projeto=proj.nome,
-                    habilidade=habilidade,
-                    mes_inicio=mes_inicio,
-                    duracao=duracao
-                )
-                todas_turmas.append(turma_obj)
-                turma_counter += 1
-
-    # Criar pool de instrutores (Genéricos para dimensionamento)
-    # Estimativa: Total turmas / Capacidade média (com folga)
-    num_meses = len(meses)
-    total_turmas_count = len(todas_turmas)
-
-    # Criamos instrutores "virtuais" suficientes para cobrir a demanda
-    # Identificamos IDs como PROG_1, PROG_2... e ROB_1, ROB_2...
-    if total_turmas_count > 0:
-        num_instrutores_est = int(total_turmas_count / parametros.capacidade_max_instrutor) + 10
-    else:
-        num_instrutores_est = 2
-
-    instrutores = []
-    for i in range(1, num_instrutores_est + 1):
-        instrutores.append(Instrutor(f"PROG_{i}", "PROG", parametros.capacidade_max_instrutor, None))
-        instrutores.append(Instrutor(f"ROB_{i}", "ROBOTICA", parametros.capacidade_max_instrutor, None))
-
-    # --- 2. MODELAGEM (OR-TOOLS) ---
+    # Inicializa o solver SCIP
     solver = pywraplp.Solver.CreateSolver('SCIP')
-    if not solver: return {'status': 'falha', 'motivo': 'Solver SCIP não encontrado'}
+    if not solver:
+        return {"status": "falha", "erro": "Solver SCIP não encontrado"}
 
     solver.SetTimeLimit(parametros.timeout_segundos * 1000)
 
-    # Variáveis: y[instrutor, turma] = 1 se instrutor assume a turma
-    y = {}
+    num_meses = len(meses)
 
-    # Mapeamento de compatibilidade
-    candidatos_por_turma = defaultdict(list)
+    # 1. CRIAÇÃO DAS TURMAS (CORRIGIDO: Garante Habilidade PROG ou ROBOTICA)
+    turmas_objetos = []
+    for item in cronograma_estagio1:
+        # IMPORTANTE: O Estágio 1 deve enviar 'PROG' ou 'ROBOTICA'
+        # Se vier algo diferente, forçamos para PROG para evitar Inviabilidade
+        hab_limpa = str(item.get('habilidade', 'PROG')).upper()
+        if hab_limpa not in ['PROG', 'ROBOTICA']:
+            hab_limpa = 'PROG'
 
-    for t_idx, turma in enumerate(todas_turmas):
-        for i_idx, instr in enumerate(instrutores):
-            # Validação de Habilidade
-            if instr.habilidade == turma.habilidade:
-                var = solver.BoolVar(f'y_{instr.id}_{turma.id}')
-                y[(instr.id, turma.id)] = var
-                candidatos_por_turma[turma.id].append(instr)
+        for _ in range(item['qtd']):
+            t = Turma(
+                id=len(turmas_objetos),
+                projeto=item['projeto_nome'],
+                mes_inicio=item['mes_inicio'],
+                duracao=item['duracao'],
+                habilidade=hab_limpa
+            )
+            turmas_objetos.append(t)
 
-    # Restrição 1: Cada turma deve ter exatamente 1 instrutor
-    for turma in todas_turmas:
-        candidatos = [y[(i.id, turma.id)] for i in candidatos_por_turma[turma.id]]
-        if not candidatos:
-            print(f"[AVISO] Sem instrutores compatíveis para turma {turma.id} ({turma.habilidade})")
-            continue
-        solver.Add(solver.Sum(candidatos) == 1)
+    num_turmas = len(turmas_objetos)
+    if num_turmas == 0:
+        return {"status": "falha", "erro": "Nenhuma turma para alocar"}
 
-    # Restrição 2: Capacidade Mensal do Instrutor
-    # Precisamos saber quais turmas estão ativas em cada mês
-    turmas_ativas_por_mes = defaultdict(list)  # {mes_idx: [turma_obj, ...]}
-    for t in todas_turmas:
-        meses_ativos = calcular_meses_ativos(t.mes_inicio, t.duracao, meses_ferias_idx, num_meses)
-        for m in meses_ativos:
-            turmas_ativas_por_mes[m].append(t)
+    # 2. POOL DE INSTRUTORES (CORRIGIDO: Construtor com 4 argumentos)
+    # Criamos um pool robusto para garantir que sempre haja instrutores disponíveis
+    num_max_instrutores = num_turmas + 10
+    instrutores = []
+    for i in range(num_max_instrutores):
+        hab = 'PROG' if i < (num_max_instrutores // 2) else 'ROBOTICA'
+        instrutores.append(Instrutor(
+            id=f"{hab}_{i + 1}",
+            habilidade=hab,
+            capacidade=parametros.capacidade_max_instrutor,
+            laboratorio_id="LAB_PADRAO"
+        ))
 
-    # Variáveis auxiliares para uso do instrutor: usado[instrutor]
-    instrutor_usado = {}
+    num_instrutores = len(instrutores)
 
-    for instr in instrutores:
-        instrutor_usado[instr.id] = solver.BoolVar(f'usado_{instr.id}')
+    # 3. VARIÁVEIS DE DECISÃO
+    x = {}  # x[instrutor, turma]
+    for i in range(num_instrutores):
+        for t in range(num_turmas):
+            x[i, t] = solver.BoolVar(f'x_{i}_{t}')
 
-        vars_instrutor = []
+    # Variável para saber se o instrutor está sendo usado
+    instrutor_ativo = [solver.BoolVar(f'ativo_{i}') for i in range(num_instrutores)]
 
+    # 4. RESTRIÇÕES
+
+    # R1: Cada turma DEVE ter exatamente 1 instrutor
+    for t in range(num_turmas):
+        solver.Add(solver.Sum([x[i, t] for i in range(num_instrutores)]) == 1)
+
+    # R2: Compatibilidade de Habilidade (Rígida)
+    for i in range(num_instrutores):
+        for t in range(num_turmas):
+            if instrutores[i].habilidade != turmas_objetos[t].habilidade:
+                solver.Add(x[i, t] == 0)
+
+    # R3: Capacidade Mensal e Ativação
+    for i in range(num_instrutores):
+        # Carga total do instrutor
+        carga_total = solver.Sum([x[i, t] for t in range(num_turmas)])
+
+        # Se carga > 0, então ativo = 1
+        solver.Add(carga_total <= num_turmas * instrutor_ativo[i])
+
+        # Restrição de Capacidade por Mês
         for m in range(num_meses):
-            # Turmas ativas neste mês que podem ser deste instrutor
-            turmas_no_mes = [t for t in turmas_ativas_por_mes[m] if (instr.id, t.id) in y]
+            turmas_no_mes = []
+            for t_idx, t in enumerate(turmas_objetos):
+                if m in calcular_meses_ativos(t.mes_inicio, t.duracao, meses_ferias_idx, num_meses):
+                    turmas_no_mes.append(x[i, t_idx])
 
             if turmas_no_mes:
-                carga_mes = solver.Sum([y[(instr.id, t.id)] for t in turmas_no_mes])
-                vars_instrutor.extend([y[(instr.id, t.id)] for t in turmas_no_mes])
+                solver.Add(solver.Sum(turmas_no_mes) <= instrutores[i].capacidade)
 
-                # Restrição de Capacidade
-                solver.Add(carga_mes <= instr.capacidade)
+    # --- 5. LÓGICA DE SPREAD POR TIPOLOGIA (SOFT CONSTRAINT - CORRIGIDA) ---
 
-        if vars_instrutor:
-            # Se a soma das atribuições > 0, então usado deve ser 1
-            # M * usado >= soma
-            solver.Add(solver.Sum(vars_instrutor) <= 1000 * instrutor_usado[instr.id])
+    def criar_spread_tipologia(indices, nome):
+        if not indices: return solver.IntVar(0, 0, f'spread_{nome}_vazio')
 
-    # Função Objetivo: Minimizar número de instrutores usados
-    obj_instrutores = solver.Sum(instrutor_usado.values())
-    solver.Minimize(obj_instrutores * parametros.peso_instrutores)
+        max_v = solver.IntVar(0, num_turmas, f'max_{nome}')
+        min_v = solver.IntVar(0, num_turmas, f'min_{nome}')
+        spread_v = solver.IntVar(0, num_turmas, f'spread_{nome}')
 
+        for i in indices:
+            carga = solver.Sum([x[i, t] for t in range(num_turmas)])
+            solver.Add(max_v >= carga)
+            # Big-M: Se o instrutor está ativo, min_v <= carga. Se não, min_v <= total (ignora)
+            solver.Add(min_v <= carga + (1 - instrutor_ativo[i]) * num_turmas)
+
+        solver.Add(spread_v == max_v - min_v)
+        return spread_v
+
+    idx_prog = [i for i, inst in enumerate(instrutores) if inst.habilidade == 'PROG']
+    idx_rob = [i for i, inst in enumerate(instrutores) if inst.habilidade == 'ROBOTICA']
+
+    spread_prog = criar_spread_tipologia(idx_prog, 'prog')
+    spread_rob = criar_spread_tipologia(idx_rob, 'rob')
+
+    # --- 6. FUNÇÃO OBJETIVO ---
+    # Minimiza instrutores ativos + Spreads (com peso alto)
+    solver.Minimize(
+        parametros.peso_instrutores * solver.Sum(instrutor_ativo) +
+        parametros.peso_spread * (spread_prog + spread_rob)
+    )
+
+    # --- 7. RESOLUÇÃO ---
+    print(f"Iniciando alocação de {num_turmas} turmas...")
     status = solver.Solve()
 
     if status in [pywraplp.Solver.OPTIMAL, pywraplp.Solver.FEASIBLE]:
-        atribuicoes_finais = []
+        print("✓ Solução encontrada!")
+        atribuicoes = []
+        for i in range(num_instrutores):
+            for t in range(num_turmas):
+                if x[i, t].solution_value() > 0.5:
+                    atribuicoes.append({'instrutor': instrutores[i], 'turma': turmas_objetos[t]})
 
-        # Coletar resultados
-        for t in todas_turmas:
-            for i in candidatos_por_turma[t.id]:
-                if y[(i.id, t.id)].solution_value() > 0.5:
-                    atribuicoes_finais.append({
-                        'turma': t,
-                        'instrutor': i
-                    })
-                    break
-
-        # Calcular métricas finais
-        total_instrutores = sum(1 for i in instrutores if instrutor_usado[i.id].solution_value() > 0.5)
-
-        # Cálculo simplificado de spread (apenas para relatório)
-        cargas = defaultdict(int)
-        for atr in atribuicoes_finais:
-            cargas[atr['instrutor'].id] += 1
-        vals = list(cargas.values())
-        spread = (max(vals) - min(vals)) if vals else 0
+        s_p = int(spread_prog.solution_value())
+        s_r = int(spread_rob.solution_value())
 
         return {
-            'status': 'sucesso',
-            'atribuicoes': atribuicoes_finais,
-            'turmas': todas_turmas,
-            'total_instrutores_flex': total_instrutores,
-            'spread_carga': spread
+            "status": "sucesso",
+            "atribuicoes": atribuicoes,
+            "turmas": turmas_objetos,
+            "spread_carga": max(s_p, s_r),
+            "spread_detalhado": {"PROG": s_p, "ROB": s_r}
         }
-    else:
-        return {'status': 'falha', 'motivo': 'Inviável'}
+
+    return {"status": "falha", "erro": "O solver não conseguiu encontrar uma solução viável."}

@@ -1,5 +1,6 @@
 from ortools.linear_solver import pywraplp
 from typing import List, Dict, Any
+import numpy as np
 from ..data_models import Projeto, ParametrosOtimizacao
 from ..utils import calcular_meses_ativos
 
@@ -8,9 +9,15 @@ def otimizar_curva_demanda(projetos: List[Projeto], meses: List[str], parametros
     str, Any]:
     """
     Estágio 1: Otimiza o cronograma de início das turmas.
-    Objetivo: Nivelar a demanda mensal e respeitar restrições de tempo e mínimo de atividade.
+
+    INTERPRETAÇÃO 1 (CORRETA): Cada mês deve ter PELO MENOS o mínimo especificado
+    de turmas ativas do projeto.
     """
-    print("\nIniciando Solver (SCIP)...")
+
+    print("\n" + "=" * 80)
+    print("STAGE 1: OTIMIZAÇÃO DE CRONOGRAMA")
+    print("=" * 80)
+
     solver = pywraplp.Solver.CreateSolver('SCIP')
     if not solver:
         print("[ERRO] Solver SCIP não encontrado.")
@@ -19,14 +26,16 @@ def otimizar_curva_demanda(projetos: List[Projeto], meses: List[str], parametros
     solver.SetTimeLimit(parametros.timeout_segundos * 1000)
     num_meses = len(meses)
 
+    print(f"\nParâmetros:")
+    print(f"  Período: {meses[0]} a {meses[-1]} ({num_meses} meses)")
+    print(f"  Pico máximo permitido: {parametros.pico_maximo_turmas} turmas")
+    print(f"  Projetos: {len(projetos)}")
+
     # Variáveis: x[i, j] = número de turmas do projeto i começando no mês j
     x = {}
     for i, proj in enumerate(projetos):
         for j in range(num_meses):
             x[i, j] = solver.IntVar(0, proj.prog + proj.rob, f'x_{i}_{j}')
-
-    # Variável de pico (para minimizar o máximo)
-    z = solver.IntVar(0, parametros.pico_maximo_turmas, 'z')
 
     # Restrição 1: Total de turmas deve ser cumprido
     for i, proj in enumerate(projetos):
@@ -38,69 +47,71 @@ def otimizar_curva_demanda(projetos: List[Projeto], meses: List[str], parametros
             if j < proj.inicio_min or j > proj.inicio_max:
                 solver.Add(x[i, j] == 0)
 
-    # Restrição 3: Cálculo de demanda mensal e Limite de Pico
-    demanda_mensal = [[] for _ in range(num_meses)]
+    # Restrição 3: Cálculo de demanda mensal
+    demanda_mensal_valores = [[] for _ in range(num_meses)]
 
     for i, proj in enumerate(projetos):
         for start_month in range(num_meses):
-            # Se uma turma começa em 'start_month', em quais meses ela estará ativa?
             meses_ativos = calcular_meses_ativos(start_month, proj.duracao, parametros.meses_ferias, num_meses)
 
             for m_ativo in meses_ativos:
-                demanda_mensal[m_ativo].append(x[i, start_month])
+                demanda_mensal_valores[m_ativo].append(x[i, start_month])
 
+    # Restrição 4: Pico máximo (HARD CONSTRAINT)
+    print(f"\nAplicando restrição de pico máximo ({parametros.pico_maximo_turmas} turmas)...")
     for m in range(num_meses):
-        if demanda_mensal[m]:
-            solver.Add(solver.Sum(demanda_mensal[m]) <= z)
+        if demanda_mensal_valores[m]:
+            solver.Add(solver.Sum(demanda_mensal_valores[m]) <= parametros.pico_maximo_turmas)
 
-    # --- NOVA RESTRIÇÃO: MÍNIMO DE TURMAS POR MÊS (EXCETO FÉRIAS) ---
-    print("Aplicando restrições de mínimo mensal...")
+    # Restrição 5: Mínimo de turmas por mês (INTERPRETAÇÃO 1 - CORRETA)
+    print(f"Aplicando restrição de mínimo de turmas por mês...")
 
     for i, proj in enumerate(projetos):
-        # Acesso seguro ao atributo min_turmas (caso namedtuple antigo esteja em cache)
         min_turmas = getattr(proj, 'min_turmas', 0)
 
         if min_turmas <= 0:
             continue
 
-        # Identificar intervalo de vigência do projeto
+        # Para cada mês no período do projeto
         for m in range(proj.inicio_min, proj.mes_fim_projeto + 1):
-            if m >= num_meses: break
+            if m >= num_meses:
+                break
 
-            # EXCEÇÃO: Se for mês de férias, não aplica mínimo
+            # Verificar se é mês de férias
             mes_nome = meses[m]
-            is_ferias = False
-            for ferias_mes in parametros.meses_ferias:
-                if ferias_mes == mes_nome:
-                    is_ferias = True
-                    break
+            is_ferias = any(ferias_mes == mes_nome for ferias_mes in parametros.meses_ferias)
 
             if is_ferias:
                 continue
 
-            # Calcular quantas turmas deste projeto estão ativas no mês 'm'
+            # Calcular quais turmas estão ativas neste mês
             vars_ativas_no_mes = []
 
-            start_range_min = max(0, m - proj.duracao * 2)
-            start_range_max = m + 1
-
-            for s in range(start_range_min, start_range_max):
-                meses_ativos_da_turma = calcular_meses_ativos(s, proj.duracao, parametros.meses_ferias, num_meses)
-                if m in meses_ativos_da_turma:
-                    vars_ativas_no_mes.append(x[i, s])
+            # Uma turma que começou em 's' está ativa em 'm' se:
+            # s <= m < s + duracao
+            for s in range(max(0, m - proj.duracao + 1), m + 1):
+                if s >= proj.inicio_min and s <= proj.inicio_max:
+                    meses_ativos_da_turma = calcular_meses_ativos(s, proj.duracao, parametros.meses_ferias, num_meses)
+                    if m in meses_ativos_da_turma:
+                        vars_ativas_no_mes.append(x[i, s])
 
             if vars_ativas_no_mes:
-                # Aplica a restrição: Soma das ativas >= Mínimo Configurado
+                # RESTRIÇÃO CORRETA: Demanda em mês m >= mínimo
                 solver.Add(solver.Sum(vars_ativas_no_mes) >= min_turmas)
 
-    # Função Objetivo: Minimizar Pico (z)
-    solver.Minimize(z)
+    # Função Objetivo: Minimizar a soma de demandas (alisamento)
+    demanda_vars = [solver.Sum(demanda_mensal_valores[m]) for m in range(num_meses) if demanda_mensal_valores[m]]
 
-    print("Resolvendo...")
+    if demanda_vars:
+        objetivo = solver.Sum(demanda_vars)
+        solver.Minimize(objetivo)
+
+    print("\nResolvendo...")
     status = solver.Solve()
 
     if status in [pywraplp.Solver.OPTIMAL, pywraplp.Solver.FEASIBLE]:
-        print("Solução encontrada!")
+        print("✓ Solução encontrada!")
+
         cronograma = []
         for i, proj in enumerate(projetos):
             for j in range(num_meses):
@@ -115,27 +126,40 @@ def otimizar_curva_demanda(projetos: List[Projeto], meses: List[str], parametros
                         'habilidade': 'MISTA'
                     })
 
+        # Calcular demanda final
         demanda_final = [0] * num_meses
         for m in range(num_meses):
             val = 0
-            for item in demanda_mensal[m]:
+            for item in demanda_mensal_valores[m]:
                 val += int(item.solution_value())
             demanda_final[m] = val
+
+        pico_real = max(demanda_final) if demanda_final else 0
+
+        print(f"\n[✓] Resultados Stage 1:")
+        print(f"  Pico real: {pico_real} turmas")
+        print(f"  Limite: {parametros.pico_maximo_turmas} turmas")
+        print(f"  Cronograma: {len(cronograma)} itens de início")
+        print(f"  Total de turmas: {sum(item['qtd'] for item in cronograma)}")
+
+        # Mostrar demanda por mês
+        print(f"\nDemanda mensal:")
+        for m, dem in enumerate(demanda_final):
+            if dem > 0:
+                status_str = "✓" if dem <= parametros.pico_maximo_turmas else "✗"
+                print(f"  {status_str} {meses[m]}: {dem} turmas")
 
         return {
             'status': 'otimo',
             'cronograma': cronograma,
-            'pico_max': int(z.solution_value()),
+            'pico_max': pico_real,
             'demanda_mensal': demanda_final,
             'meses_ferias': [meses.index(m) for m in parametros.meses_ferias if m in meses]
         }
     else:
-        print("\n" + "!" * 60)
-        print("[ERRO CRÍTICO] Otimização INVIÁVEL (Infeasible).")
-        print("As restrições configuradas são matematicamente impossíveis de atender.")
-        print(
-            "Dica: Verifique se o 'Mínimo de turmas por mês' não é alto demais para o 'Número total de turmas' e a 'Duração'.")
-        print(
-            "Exemplo: Se você tem 8 turmas de 2 meses, você tem estoque para cobrir apenas 16 meses. Se o projeto dura 3 meses e exige 8 por mês, precisaria de 24 meses de estoque.")
-        print("!" * 60 + "\n")
+        print("\n[ERRO] Solver não encontrou solução viável")
+        print("\nPossíveis causas:")
+        print("  1. Mínimo de turmas/mês é muito alto")
+        print("  2. Pico máximo é muito baixo")
+        print("  3. Conflito entre mínimo e pico")
         return None

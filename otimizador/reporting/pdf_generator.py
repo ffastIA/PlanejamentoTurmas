@@ -1,3 +1,8 @@
+"""
+Módulo de geração de relatórios PDF
+Versão 3.9 (Com correção de cálculo de pico de instrutores)
+"""
+
 from fpdf import FPDF
 from datetime import datetime
 from typing import Dict, List
@@ -7,29 +12,36 @@ from ..utils import calcular_fluxo_caixa_detalhado, calcular_meses_ativos
 
 
 class PDFRelatorio(FPDF):
+    """Classe para geração de relatórios PDF"""
+
     def header(self):
+        """Cabeçalho das páginas"""
         self.set_font('Arial', 'B', 14)
         self.cell(0, 10, 'Relatorio de Planejamento de Turmas e Instrutores', 0, 1, 'C')
         self.ln(5)
 
     def footer(self):
+        """Rodapé das páginas"""
         self.set_y(-15)
         self.set_font('Arial', 'I', 8)
         self.cell(0, 10, f'Pagina {self.page_no()}/{{nb}} - Gerado em {datetime.now().strftime("%d/%m/%Y %H:%M")}', 0,
                   0, 'C')
 
     def chapter_title(self, title):
+        """Título de seção"""
         self.set_font('Arial', 'B', 12)
         self.set_fill_color(220, 230, 240)
         self.cell(0, 10, title, 0, 1, 'L', 1)
         self.ln(4)
 
     def chapter_body(self, body):
+        """Corpo de texto"""
         self.set_font('Arial', '', 10)
         self.multi_cell(0, 5, body)
         self.ln()
 
     def add_image_centered(self, image_path, width=170):
+        """Adiciona imagem centralizada"""
         if image_path:
             if self.get_y() + (width * 0.6) > 270:
                 self.add_page()
@@ -37,6 +49,7 @@ class PDFRelatorio(FPDF):
             self.ln(5)
 
     def create_table(self, header, data, col_widths):
+        """Cria tabela no PDF"""
         estimativa_altura = len(data) * 6 + 10
         if self.get_y() + estimativa_altura > 270:
             self.add_page()
@@ -55,6 +68,7 @@ class PDFRelatorio(FPDF):
                 texto = str(item).encode('latin-1', 'replace').decode('latin-1')
                 self.cell(width, 6, texto, 1, 0, 'C', fill)
             self.ln()
+            fill = not fill
 
 
 def gerar_relatorio_pdf(projetos_config: List[ConfiguracaoProjeto],
@@ -67,27 +81,64 @@ def gerar_relatorio_pdf(projetos_config: List[ConfiguracaoProjeto],
                         distribuicao_por_projeto: Dict,
                         pico_maximo_limite: int,
                         parametros_financeiros: ParametrosFinanceiros = None,
-                        df_evolucao_instrutores: pd.DataFrame = None):  # Novo parametro
+                        df_evolucao_instrutores: pd.DataFrame = None):
+    """
+    Gera relatório PDF completo de otimização
+
+    CORREÇÃO v3.9: Cálculo correto do pico de instrutores
+    - Antes: Contava total de instrutores únicos no período (21)
+    - Depois: Conta máximo de instrutores ativos simultaneamente (16)
+    """
 
     pdf = PDFRelatorio()
     pdf.alias_nb_pages()
     pdf.add_page()
 
-    # 1. RESUMO
+    # ========================================================================
+    # CORREÇÃO CRÍTICA: Calcular o pico CORRETO de instrutores
+    # ========================================================================
+
+    pico_instrutores_real = 0
+    mes_pico = "desconhecido"
+    instrutores_prog_pico = 0
+    instrutores_rob_pico = 0
+
+    if df_evolucao_instrutores is not None and not df_evolucao_instrutores.empty:
+        # Método correto: usar o máximo da tabela de evolução mensal
+        pico_idx = df_evolucao_instrutores['Total'].idxmax()
+        pico_instrutores_real = int(df_evolucao_instrutores.loc[pico_idx, 'Total'])
+        mes_pico = df_evolucao_instrutores.loc[pico_idx, 'Mes']
+        instrutores_prog_pico = int(df_evolucao_instrutores.loc[pico_idx, 'Instrutores_PROG'])
+        instrutores_rob_pico = int(df_evolucao_instrutores.loc[pico_idx, 'Instrutores_ROB'])
+    else:
+        # Fallback: usar contagem por habilidade
+        pico_instrutores_real = sum(contagem_instrutores_hab.values())
+        for hab, count in contagem_instrutores_hab.items():
+            if hab == 'PROG':
+                instrutores_prog_pico = count
+            elif hab == 'ROBOTICA':
+                instrutores_rob_pico = count
+
+    # ========================================================================
+    # 1. RESUMO EXECUTIVO
+    # ========================================================================
     pdf.chapter_title("1. Resumo Executivo")
     total_turmas = len(resultados_estagio2['turmas'])
-    total_instrutores = resultados_estagio2['total_instrutores_flex']
 
+    # CORREÇÃO: Usar pico_instrutores_real (máximo simultâneo)
     texto_resumo = (
         f"Este documento apresenta o planejamento otimizado para o periodo de {resultados_estagio1['periodo']}.\n\n"
         f"- Total de Projetos: {len(projetos_config)}\n"
         f"- Total de Turmas Alocadas: {total_turmas}\n"
-        f"- Quadro de Instrutores Necessario (Pico): {total_instrutores}\n"
+        f"- Quadro de Instrutores Necessario (Pico): {pico_instrutores_real}\n"
+        f"  (Pico em {mes_pico}: {instrutores_prog_pico} PROG + {instrutores_rob_pico} ROB)\n"
         f"- Spread de Carga (Equilibrio): {resultados_estagio2['spread_carga']} (Max permitido: {resultados_estagio2['spread_max_permitido']})"
     )
     pdf.chapter_body(texto_resumo)
 
-    # 2. PROJETOS
+    # ========================================================================
+    # 2. PROJETOS CONFIGURADOS
+    # ========================================================================
     pdf.chapter_title("2. Projetos Configurados")
     for proj in projetos_config:
         pdf.set_font('Arial', 'B', 10)
@@ -100,22 +151,30 @@ def gerar_relatorio_pdf(projetos_config: List[ConfiguracaoProjeto],
         pdf.ln(2)
     pdf.ln()
 
-    # 3. CRONOGRAMA DE EXECUÇÃO
+    # ========================================================================
+    # 3. ANÁLISE DE DEMANDA E CRONOGRAMA
+    # ========================================================================
     pdf.add_page()
     pdf.chapter_title("3. Analise de Demanda e Cronograma")
 
     pdf.set_font('Arial', '', 10)
+
+    # Calcular pico de turmas
+    pico_turmas = 0
+    if not serie_temporal_df.empty:
+        pico_turmas = int(serie_temporal_df['Total'].max())
+
     pdf.multi_cell(0, 5,
-                   f"O pico maximo de turmas simultaneas identificado foi de {resultados_estagio1['pico_max']} turmas (Limite configurado: {pico_maximo_limite}).")
+                   f"O pico maximo de turmas simultaneas identificado foi de {pico_turmas} turmas (Limite configurado: {pico_maximo_limite}).")
     pdf.ln(2)
 
-    # 3.1 Consolidado
+    # 3.1 Cronograma Consolidado
     if graficos_paths.get('cronograma_consolidado'):
         pdf.set_font('Arial', 'B', 10)
         pdf.cell(0, 8, "3.1. Cronograma de Execucao CONSOLIDADO", 0, 1)
         pdf.add_image_centered(graficos_paths['cronograma_consolidado'], width=180)
 
-    # 3.2 Individuais por Projeto (LOOP)
+    # 3.2 Cronogramas por Projeto
     pdf.ln(5)
     pdf.set_font('Arial', 'B', 10)
     pdf.cell(0, 8, "3.2. Detalhamento de Execucao por Projeto", 0, 1)
@@ -135,6 +194,7 @@ def gerar_relatorio_pdf(projetos_config: List[ConfiguracaoProjeto],
         pdf.cell(0, 8, "3.3. Curva de Demanda por Habilidade (PROG vs ROB)", 0, 1)
         pdf.add_image_centered(graficos_paths['prog_rob'], width=180)
 
+    # Tabela de Demanda Mensal
     if not serie_temporal_df.empty:
         pdf.ln(5)
         pdf.set_font('Arial', 'B', 10)
@@ -152,7 +212,9 @@ def gerar_relatorio_pdf(projetos_config: List[ConfiguracaoProjeto],
             ])
         pdf.create_table(header, data, widths)
 
-    # 4. EQUIPE
+    # ========================================================================
+    # 4. DIMENSIONAMENTO DA EQUIPE
+    # ========================================================================
     pdf.add_page()
     pdf.chapter_title("4. Dimensionamento da Equipe")
 
@@ -168,6 +230,7 @@ def gerar_relatorio_pdf(projetos_config: List[ConfiguracaoProjeto],
     if graficos_paths.get('carga_instrutor'):
         pdf.add_image_centered(graficos_paths['carga_instrutor'], width=150)
 
+    # Tabela de Instrutores Alocados
     if not df_consolidada_instrutor.empty:
         pdf.ln(5)
         pdf.set_font('Arial', 'B', 10)
@@ -185,14 +248,18 @@ def gerar_relatorio_pdf(projetos_config: List[ConfiguracaoProjeto],
             ])
         pdf.create_table(header, data, widths)
 
-    # 5. CONCLUSÕES
+    # ========================================================================
+    # 5. PREVISÃO DE CONCLUSÕES
+    # ========================================================================
     pdf.add_page()
     pdf.chapter_title("5. Previsao de Conclusoes")
     pdf.chapter_body("Volume de turmas encerrando suas atividades mes a mes.")
     if graficos_paths.get('conclusoes'):
         pdf.add_image_centered(graficos_paths['conclusoes'], width=180)
 
-    # --- NOVA SEÇÃO: EVOLUÇÃO MENSAL DA EQUIPE ---
+    # ========================================================================
+    # 6. EVOLUÇÃO MENSAL DA EQUIPE
+    # ========================================================================
     if df_evolucao_instrutores is not None and not df_evolucao_instrutores.empty:
         pdf.add_page()
         pdf.chapter_title("6. Evolucao Mensal da Equipe")
@@ -217,7 +284,9 @@ def gerar_relatorio_pdf(projetos_config: List[ConfiguracaoProjeto],
             ])
         pdf.create_table(header, data, widths)
 
-    # 7. FINANCEIRO (Renumerado)
+    # ========================================================================
+    # 7. ANÁLISE FINANCEIRA E FLUXO DE CAIXA
+    # ========================================================================
     if parametros_financeiros:
         pdf.add_page()
         pdf.chapter_title("7. Analise Financeira e Fluxo de Caixa")
@@ -235,19 +304,20 @@ def gerar_relatorio_pdf(projetos_config: List[ConfiguracaoProjeto],
         pdf.set_font('Arial', 'B', 12)
         pdf.cell(0, 10, "7.1. Detalhamento por Projeto", 0, 1)
 
-        meses = serie_temporal_df['Mes'].tolist()
+        meses = serie_temporal_df['Mes'].tolist() if not serie_temporal_df.empty else []
 
         for proj in projetos_config:
             df_proj = calcular_fluxo_caixa_detalhado(
                 resultados_estagio2['atribuicoes'],
                 meses,
-                resultados_estagio1['meses_ferias'],
+                resultados_estagio1.get('meses_ferias', []),
                 parametros_financeiros,
                 projeto_filtro=proj.nome
             )
 
             if not df_proj.empty and df_proj['Custo Mensal'].sum() > 0:
-                if pdf.get_y() > 220: pdf.add_page()
+                if pdf.get_y() > 220:
+                    pdf.add_page()
 
                 pdf.set_font('Arial', 'B', 11)
                 pdf.set_fill_color(245, 245, 245)
@@ -258,12 +328,14 @@ def gerar_relatorio_pdf(projetos_config: List[ConfiguracaoProjeto],
                     pdf.add_image_centered(graficos_paths[chave_grafico], width=160)
 
                 pdf.ln(2)
-                data = [[r['Mês'], f"R$ {r['Custo Mensal']:,.2f}", f"R$ {r['Custo Acumulado']:,.2f}"] for _, r in
-                        df_proj.iterrows()]
+                data = [
+                    [r['Mês'], f"R$ {r['Custo Mensal']:,.2f}", f"R$ {r['Custo Acumulado']:,.2f}"]
+                    for _, r in df_proj.iterrows()
+                ]
                 pdf.create_table(['Mes', 'Custo Mensal', 'Acumulado'], data, [50, 60, 60])
                 pdf.ln(5)
 
-        # 7.2 Consolidado
+        # 7.2 Fluxo de Caixa Consolidado
         pdf.add_page()
         pdf.chapter_title("7.2. Fluxo de Caixa CONSOLIDADO")
         pdf.chapter_body("Visao total incluindo custos diretos dos projetos e custos globais/permanentes.")
@@ -274,16 +346,22 @@ def gerar_relatorio_pdf(projetos_config: List[ConfiguracaoProjeto],
         df_fin = calcular_fluxo_caixa_detalhado(
             resultados_estagio2['atribuicoes'],
             meses,
-            resultados_estagio1['meses_ferias'],
+            resultados_estagio1.get('meses_ferias', []),
             parametros_financeiros
         )
 
         if not df_fin.empty:
             pdf.ln(5)
-            data = [[r['Mês'], f"R$ {r['Custo Mensal']:,.2f}", f"R$ {r['Custo Acumulado']:,.2f}"] for _, r in
-                    df_fin.iterrows()]
+            data = [
+                [r['Mês'], f"R$ {r['Custo Mensal']:,.2f}", f"R$ {r['Custo Acumulado']:,.2f}"]
+                for _, r in df_fin.iterrows()
+            ]
             pdf.create_table(['Mes', 'Custo Mensal', 'Acumulado'], data, [50, 60, 60])
 
+    # ========================================================================
+    # GERAR PDF
+    # ========================================================================
     nome_arquivo = "resultados_otimizacao/Relatorio_Otimizacao_Completo.pdf"
     pdf.output(nome_arquivo)
     print(f"  ✓ Relatório PDF gerado com sucesso: {nome_arquivo}")
+    print(f"    [CORREÇÃO v3.9] Pico de instrutores: {pico_instrutores_real} (máximo simultâneo em {mes_pico})")
