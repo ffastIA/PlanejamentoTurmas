@@ -1,6 +1,7 @@
 """
 Módulo de geração de relatórios PDF
-Versão 4.0 (Timestamp no nome do arquivo — sem sobrescrita)
+Versão 4.1 — Novo indicador: Ociosidade Mensal (Seção 7)
+             Seção financeira renumerada para 8
 """
 
 from fpdf import FPDF
@@ -17,7 +18,11 @@ class PDFRelatorio(FPDF):
     def header(self):
         """Cabeçalho das páginas"""
         self.set_font('Arial', 'B', 14)
-        self.cell(0, 10, 'Relatorio de Planejamento de Turmas e Instrutores', 0, 1, 'C')
+        self.cell(
+            0, 10,
+            'Relatorio de Planejamento de Turmas e Instrutores',
+            0, 1, 'C'
+        )
         self.ln(5)
 
     def footer(self):
@@ -78,6 +83,72 @@ class PDFRelatorio(FPDF):
             fill = not fill
 
 
+# =============================================================================
+# FUNÇÃO AUXILIAR — CÁLCULO DE OCIOSIDADE MENSAL
+# =============================================================================
+
+def _calcular_ociosidade_mensal(
+    df_evolucao_instrutores: pd.DataFrame,
+    serie_temporal_df: pd.DataFrame,
+    capacidade_max_instrutor: int
+) -> pd.DataFrame:
+    """
+    Calcula o indicador de ociosidade mensal global.
+
+    Fórmula:
+      capacidade_total[m] = instrutores_ativos[m] × capacidade_max
+      turmas_ativas[m]    = demanda total do mês (PROG + ROB)
+      ocioso_abs[m]       = capacidade_total[m] - turmas_ativas[m]
+      ocioso_pct[m]       = ocioso_abs[m] / capacidade_total[m]
+
+    Fontes:
+      df_evolucao_instrutores → coluna 'Total' (instrutores ativos/mês)
+      serie_temporal_df       → coluna 'Total' (turmas ativas/mês)
+
+    Retorna DataFrame com colunas:
+      Mes, Instrutores_Ativos, Capacidade_Total,
+      Turmas_Ativas, Ociosidade_Abs, Ociosidade_Pct
+    """
+    if df_evolucao_instrutores is None \
+            or df_evolucao_instrutores.empty \
+            or serie_temporal_df is None \
+            or serie_temporal_df.empty:
+        return pd.DataFrame()
+
+    # Alinhar pelos meses presentes em ambos os DataFrames
+    df_evo  = df_evolucao_instrutores.set_index('Mes')
+    df_dem  = serie_temporal_df.set_index('Mes')
+    meses_comuns = df_evo.index.intersection(df_dem.index)
+
+    registros = []
+    for mes in meses_comuns:
+        inst_ativos     = int(df_evo.loc[mes, 'Total'])
+        turmas_ativas   = int(df_dem.loc[mes, 'Total'])
+        cap_total       = inst_ativos * capacidade_max_instrutor
+
+        if cap_total == 0:
+            # Mês sem instrutores ativos — ociosidade indefinida
+            continue
+
+        ocioso_abs = max(0, cap_total - turmas_ativas)
+        ocioso_pct = ocioso_abs / cap_total * 100
+
+        registros.append({
+            'Mes':              mes,
+            'Instrutores_Ativos': inst_ativos,
+            'Capacidade_Total': cap_total,
+            'Turmas_Ativas':    turmas_ativas,
+            'Ociosidade_Abs':   ocioso_abs,
+            'Ociosidade_Pct':   round(ocioso_pct, 1)
+        })
+
+    return pd.DataFrame(registros)
+
+
+# =============================================================================
+# FUNÇÃO PRINCIPAL
+# =============================================================================
+
 def gerar_relatorio_pdf(
     projetos_config: List[ConfiguracaoProjeto],
     resultados_estagio1: Dict,
@@ -94,11 +165,13 @@ def gerar_relatorio_pdf(
     """
     Gera relatório PDF completo de otimização.
 
-    v4.0: Nome do arquivo inclui timestamp (AAMMDD_HHMMSS),
-          evitando sobrescrita de relatórios anteriores.
-
-    Exemplo de saída:
-      resultados_otimizacao/Relatorio_Otimizacao_Completo_260221_180631.pdf
+    v4.1:
+      - Seção 7 (NOVA): Ociosidade Mensal — indicador global,
+        absoluto e percentual, derivado de df_evolucao_instrutores
+        e serie_temporal_df. Nenhum parâmetro novo na assinatura.
+      - Seção 8: Análise Financeira (era seção 7 na v4.0)
+      - Todo o restante do relatório permanece 100% inalterado.
+      - Nome com timestamp preservado da v4.0.
     """
 
     pdf = PDFRelatorio()
@@ -106,20 +179,26 @@ def gerar_relatorio_pdf(
     pdf.add_page()
 
     # =========================================================================
-    # CORREÇÃO v3.9: Pico CORRETO de instrutores (máximo simultâneo)
+    # PRÉ-CÁLCULO: Pico correto de instrutores (v3.9)
     # =========================================================================
-    pico_instrutores_real  = 0
-    mes_pico               = "desconhecido"
-    instrutores_prog_pico  = 0
-    instrutores_rob_pico   = 0
+    pico_instrutores_real = 0
+    mes_pico              = "desconhecido"
+    instrutores_prog_pico = 0
+    instrutores_rob_pico  = 0
 
     if (df_evolucao_instrutores is not None
             and not df_evolucao_instrutores.empty):
-        pico_idx               = df_evolucao_instrutores['Total'].idxmax()
-        pico_instrutores_real  = int(df_evolucao_instrutores.loc[pico_idx, 'Total'])
-        mes_pico               = df_evolucao_instrutores.loc[pico_idx, 'Mes']
-        instrutores_prog_pico  = int(df_evolucao_instrutores.loc[pico_idx, 'Instrutores_PROG'])
-        instrutores_rob_pico   = int(df_evolucao_instrutores.loc[pico_idx, 'Instrutores_ROB'])
+        pico_idx              = df_evolucao_instrutores['Total'].idxmax()
+        pico_instrutores_real = int(
+            df_evolucao_instrutores.loc[pico_idx, 'Total']
+        )
+        mes_pico              = df_evolucao_instrutores.loc[pico_idx, 'Mes']
+        instrutores_prog_pico = int(
+            df_evolucao_instrutores.loc[pico_idx, 'Instrutores_PROG']
+        )
+        instrutores_rob_pico  = int(
+            df_evolucao_instrutores.loc[pico_idx, 'Instrutores_ROB']
+        )
     else:
         pico_instrutores_real = sum(contagem_instrutores_hab.values())
         for hab, count in contagem_instrutores_hab.items():
@@ -129,7 +208,29 @@ def gerar_relatorio_pdf(
                 instrutores_rob_pico = count
 
     # =========================================================================
-    # 1. RESUMO EXECUTIVO
+    # PRÉ-CÁLCULO: Ociosidade Mensal (v4.1)
+    # Derivado exclusivamente de fontes já disponíveis na assinatura
+    # =========================================================================
+    capacidade_max = resultados_estagio2.get(
+        'capacidade_max_instrutor',
+        # Fallback: inferir da contagem de instrutores e spread
+        8  # valor padrão do sistema
+    )
+
+    # Tentar obter capacidade_max_instrutor do resultado do stage 2
+    # Se não disponível no dict, usar o atributo dos instrutores
+    atribuicoes = resultados_estagio2.get('atribuicoes', [])
+    if atribuicoes:
+        capacidade_max = atribuicoes[0]['instrutor'].capacidade
+
+    df_ociosidade = _calcular_ociosidade_mensal(
+        df_evolucao_instrutores,
+        serie_temporal_df,
+        capacidade_max
+    )
+
+    # =========================================================================
+    # 1. RESUMO EXECUTIVO — INALTERADO
     # =========================================================================
     pdf.chapter_title("1. Resumo Executivo")
     total_turmas = len(resultados_estagio2['turmas'])
@@ -150,7 +251,7 @@ def gerar_relatorio_pdf(
     pdf.chapter_body(texto_resumo)
 
     # =========================================================================
-    # 2. PROJETOS CONFIGURADOS
+    # 2. PROJETOS CONFIGURADOS — INALTERADO
     # =========================================================================
     pdf.chapter_title("2. Projetos Configurados")
     for proj in projetos_config:
@@ -175,7 +276,7 @@ def gerar_relatorio_pdf(
     pdf.ln()
 
     # =========================================================================
-    # 3. ANÁLISE DE DEMANDA E CRONOGRAMA
+    # 3. ANÁLISE DE DEMANDA E CRONOGRAMA — INALTERADO
     # =========================================================================
     pdf.add_page()
     pdf.chapter_title("3. Analise de Demanda e Cronograma")
@@ -193,7 +294,6 @@ def gerar_relatorio_pdf(
     )
     pdf.ln(2)
 
-    # 3.1 Cronograma Consolidado
     if graficos_paths.get('cronograma_consolidado'):
         pdf.set_font('Arial', 'B', 10)
         pdf.cell(0, 8, "3.1. Cronograma de Execucao CONSOLIDADO", 0, 1)
@@ -201,7 +301,6 @@ def gerar_relatorio_pdf(
             graficos_paths['cronograma_consolidado'], width=180
         )
 
-    # 3.2 Cronogramas por Projeto
     pdf.ln(5)
     pdf.set_font('Arial', 'B', 10)
     pdf.cell(0, 8, "3.2. Detalhamento de Execucao por Projeto", 0, 1)
@@ -213,7 +312,6 @@ def gerar_relatorio_pdf(
             pdf.add_image_centered(graficos_paths[chave], width=160)
             pdf.ln(2)
 
-    # 3.3 Demanda por Habilidade
     if graficos_paths.get('prog_rob'):
         pdf.add_page()
         pdf.set_font('Arial', 'B', 10)
@@ -224,12 +322,10 @@ def gerar_relatorio_pdf(
         )
         pdf.add_image_centered(graficos_paths['prog_rob'], width=180)
 
-    # Tabela de Demanda Mensal
     if not serie_temporal_df.empty:
         pdf.ln(5)
         pdf.set_font('Arial', 'B', 10)
         pdf.cell(0, 8, "Tabela de Demanda Mensal Consolidada", 0, 1)
-
         header = ['Mes', 'Demanda PROG', 'Demanda ROB', 'Total Turmas']
         widths = [40, 40, 40, 40]
         data = []
@@ -243,7 +339,7 @@ def gerar_relatorio_pdf(
         pdf.create_table(header, data, widths)
 
     # =========================================================================
-    # 4. DIMENSIONAMENTO DA EQUIPE
+    # 4. DIMENSIONAMENTO DA EQUIPE — INALTERADO
     # =========================================================================
     pdf.add_page()
     pdf.chapter_title("4. Dimensionamento da Equipe")
@@ -266,7 +362,6 @@ def gerar_relatorio_pdf(
         pdf.ln(5)
         pdf.set_font('Arial', 'B', 10)
         pdf.cell(0, 8, "Relacao de Instrutores Alocados", 0, 1)
-
         header = ['ID', 'Habilidade', 'Total Turmas', 'Projetos Atendidos']
         widths = [30, 30, 30, 100]
         data = []
@@ -280,7 +375,7 @@ def gerar_relatorio_pdf(
         pdf.create_table(header, data, widths)
 
     # =========================================================================
-    # 5. PREVISÃO DE CONCLUSÕES
+    # 5. PREVISÃO DE CONCLUSÕES — INALTERADO
     # =========================================================================
     pdf.add_page()
     pdf.chapter_title("5. Previsao de Conclusoes")
@@ -291,7 +386,7 @@ def gerar_relatorio_pdf(
         pdf.add_image_centered(graficos_paths['conclusoes'], width=180)
 
     # =========================================================================
-    # 6. EVOLUÇÃO MENSAL DA EQUIPE
+    # 6. EVOLUÇÃO MENSAL DA EQUIPE — INALTERADO
     # =========================================================================
     if (df_evolucao_instrutores is not None
             and not df_evolucao_instrutores.empty):
@@ -310,7 +405,6 @@ def gerar_relatorio_pdf(
         pdf.ln(5)
         pdf.set_font('Arial', 'B', 10)
         pdf.cell(0, 8, "Tabela de Instrutores Ativos por Mes", 0, 1)
-
         header = ['Mes', 'Instrutores PROG', 'Instrutores ROB', 'Total']
         widths = [40, 45, 45, 30]
         data = []
@@ -324,11 +418,105 @@ def gerar_relatorio_pdf(
         pdf.create_table(header, data, widths)
 
     # =========================================================================
-    # 7. ANÁLISE FINANCEIRA E FLUXO DE CAIXA
+    # 7. OCIOSIDADE MENSAL — NOVO v4.1
+    #
+    # Indicador global (não por projeto).
+    # Ociosidade = razão entre capacidade ociosa e capacidade total.
+    #
+    # Coluna "Ociosidade Abs": turmas que poderiam ser absorvidas
+    #   mas não estão sendo utilizadas naquele mês.
+    # Coluna "Ociosidade (%)": percentual da capacidade ociosa.
+    #
+    # Fórmula:
+    #   capacidade_total[m] = instrutores_ativos[m] × cap_max_instrutor
+    #   ociosidade_abs[m]   = capacidade_total[m] - turmas_ativas[m]
+    #   ociosidade_pct[m]   = ociosidade_abs[m] / capacidade_total[m]
+    # =========================================================================
+    pdf.add_page()
+    pdf.chapter_title("7. Ociosidade Mensal")
+    pdf.chapter_body(
+        "Analise global da ociosidade da equipe de instrutores mes a mes.\n"
+        "A ociosidade e definida como a razao entre a capacidade nao "
+        "utilizada e a capacidade total disponivel no mes.\n\n"
+        f"Capacidade por instrutor: {capacidade_max} turmas/mes\n"
+        "Capacidade Total (mes) = Instrutores Ativos x Capacidade Max\n"
+        "Ociosidade Abs = Capacidade Total - Turmas Ativas\n"
+        "Ociosidade (%) = Ociosidade Abs / Capacidade Total x 100"
+    )
+
+    if not df_ociosidade.empty:
+        # ── Indicadores de síntese ────────────────────────────────────────────
+        ocio_media  = df_ociosidade['Ociosidade_Pct'].mean()
+        ocio_max    = df_ociosidade['Ociosidade_Pct'].max()
+        mes_ocio_max = df_ociosidade.loc[
+            df_ociosidade['Ociosidade_Pct'].idxmax(), 'Mes'
+        ]
+        ocio_min    = df_ociosidade['Ociosidade_Pct'].min()
+        mes_ocio_min = df_ociosidade.loc[
+            df_ociosidade['Ociosidade_Pct'].idxmin(), 'Mes'
+        ]
+
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(0, 8, "Sintese de Ociosidade:", 0, 1)
+        pdf.set_font('Arial', '', 9)
+        pdf.cell(10)
+        pdf.cell(
+            0, 5,
+            f"- Media mensal:  {ocio_media:.1f}%",
+            0, 1
+        )
+        pdf.cell(10)
+        pdf.cell(
+            0, 5,
+            f"- Maior ociosidade: {ocio_max:.1f}% em {mes_ocio_max}",
+            0, 1
+        )
+        pdf.cell(10)
+        pdf.cell(
+            0, 5,
+            f"- Menor ociosidade: {ocio_min:.1f}% em {mes_ocio_min}",
+            0, 1
+        )
+        pdf.ln(5)
+
+        # ── Tabela detalhada mês a mês ────────────────────────────────────────
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(0, 8, "Detalhamento Mensal:", 0, 1)
+
+        header = [
+            'Mes',
+            'Inst. Ativos',
+            'Cap. Total',
+            'Turmas Ativas',
+            'Ociosidade Abs',
+            'Ociosidade (%)'
+        ]
+        widths = [28, 28, 28, 35, 38, 33]
+        data = []
+        for _, row in df_ociosidade.iterrows():
+            data.append([
+                row['Mes'],
+                int(row['Instrutores_Ativos']),
+                int(row['Capacidade_Total']),
+                int(row['Turmas_Ativas']),
+                int(row['Ociosidade_Abs']),
+                f"{row['Ociosidade_Pct']:.1f}%"
+            ])
+        pdf.create_table(header, data, widths)
+
+    else:
+        pdf.chapter_body(
+            "Dados insuficientes para calcular ociosidade mensal.\n"
+            "Verifique se df_evolucao_instrutores e "
+            "serie_temporal_df estao disponiveis."
+        )
+
+    # =========================================================================
+    # 8. ANÁLISE FINANCEIRA E FLUXO DE CAIXA — era seção 7, inalterada
     # =========================================================================
     if parametros_financeiros:
         pdf.add_page()
-        pdf.chapter_title("7. Analise Financeira e Fluxo de Caixa")
+        pdf.chapter_title("8. Analise Financeira e Fluxo de Caixa")
 
         pdf.set_font('Arial', 'B', 10)
         pdf.cell(0, 8, "Premissas de Custos Configuradas:", 0, 1)
@@ -346,9 +534,9 @@ def gerar_relatorio_pdf(
             )
         pdf.ln(5)
 
-        # 7.1 Detalhamento por Projeto
+        # 8.1 Detalhamento por Projeto
         pdf.set_font('Arial', 'B', 12)
-        pdf.cell(0, 10, "7.1. Detalhamento por Projeto", 0, 1)
+        pdf.cell(0, 10, "8.1. Detalhamento por Projeto", 0, 1)
 
         meses = (
             serie_temporal_df['Mes'].tolist()
@@ -396,9 +584,9 @@ def gerar_relatorio_pdf(
                 )
                 pdf.ln(5)
 
-        # 7.2 Fluxo de Caixa Consolidado
+        # 8.2 Fluxo de Caixa Consolidado
         pdf.add_page()
-        pdf.chapter_title("7.2. Fluxo de Caixa CONSOLIDADO")
+        pdf.chapter_title("8.2. Fluxo de Caixa CONSOLIDADO")
         pdf.chapter_body(
             "Visao total incluindo custos diretos dos projetos "
             "e custos globais/permanentes."
@@ -432,9 +620,9 @@ def gerar_relatorio_pdf(
             )
 
     # =========================================================================
-    # GERAR PDF — v4.0: timestamp no nome para evitar sobrescrita
+    # GERAR PDF — timestamp no nome (v4.0)
     # =========================================================================
-    timestamp    = datetime.now().strftime("%y%m%d_%H%M%S")   # ex: 260221_180631
+    timestamp    = datetime.now().strftime("%y%m%d_%H%M%S")
     nome_arquivo = (
         f"resultados_otimizacao/"
         f"Relatorio_Otimizacao_Completo_{timestamp}.pdf"
@@ -447,5 +635,10 @@ def gerar_relatorio_pdf(
         f"    [v3.9] Pico de instrutores: {pico_instrutores_real} "
         f"(máximo simultâneo em {mes_pico})"
     )
+    if not df_ociosidade.empty:
+        print(
+            f"    [v4.1] Ociosidade média: "
+            f"{df_ociosidade['Ociosidade_Pct'].mean():.1f}%"
+        )
 
     return nome_arquivo
