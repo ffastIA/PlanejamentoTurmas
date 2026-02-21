@@ -7,18 +7,20 @@ from typing import List, Optional
 # ESTRUTURAS DO MODELO DE OTIMIZAÇÃO
 # =============================================================================
 
-# ALTERAÇÃO: Campo 'ondas_detalhadas' adicionado ao Projeto.
-# Armazena a lista de ondas com mes_inicio, qtd_prog e qtd_rob
-# após resolução do Stage 1 — usado pelo Stage 2 reformulado.
-# Todos os outros campos são idênticos à versão anterior.
+# Projeto: representa uma onda de um projeto (PROG ou ROB separados em utils.py)
+# NOVO CAMPO: 'habilidade' — identifica explicitamente se é PROG ou ROBOTICA
 Projeto = namedtuple('Projeto', [
-    'nome', 'prog', 'rob', 'duracao',
-    'inicio_min', 'inicio_max', 'mes_fim_projeto', 'min_turmas',
-    'ondas_detalhadas'  # NOVO: List[Dict] | None
+    'nome',           # str  — ex: "DD2_Onda1"
+    'prog',           # int  — turmas PROG desta onda
+    'rob',            # int  — turmas ROB desta onda
+    'duracao',        # int  — duração em meses letivos
+    'inicio_min',     # int  — índice mínimo de início
+    'inicio_max',     # int  — índice máximo de início
+    'mes_fim_projeto',# int  — índice do mês de término do projeto pai
+    'min_turmas',     # int  — mínimo de turmas ativas por mês
+    'projeto_pai',    # str  — nome do projeto original (sem sufixo _OndaX)
+    'onda_idx'        # int  — índice da onda (0-based) dentro do projeto pai
 ])
-
-# Compatibilidade retroativa: permite criar Projeto sem ondas_detalhadas
-Projeto.__new__.__defaults__ = (None,)  # default para ondas_detalhadas
 
 Instrutor = namedtuple('Instrutor', [
     'id', 'habilidade', 'capacidade', 'laboratorio_id'
@@ -30,7 +32,7 @@ Turma = namedtuple('Turma', [
 
 
 # =============================================================================
-# CONFIGURAÇÃO DE PROJETOS (interface CLI → modelo)
+# CONFIGURAÇÃO DE PROJETOS (entrada do usuário — inalterada)
 # =============================================================================
 
 @dataclass
@@ -47,7 +49,7 @@ class ConfiguracaoProjeto:
     percentual_prog: float = 60.0
     turmas_min_por_mes: int = 1
 
-    # Campos calculados
+    # Campos calculados — preenchidos por utils.converter_projetos_para_modelo()
     mes_inicio_idx: int = field(default=None, init=False)
     mes_termino_idx: int = field(default=None, init=False)
 
@@ -63,7 +65,8 @@ class ConfiguracaoProjeto:
             dt_termino = datetime.strptime(self.data_termino, "%d/%m/%Y")
         except ValueError as e:
             raise ValueError(
-                f"Formato de data inválido para {self.nome}. Use DD/MM/YYYY. Erro: {e}"
+                f"Formato de data inválido para {self.nome}. "
+                f"Use DD/MM/YYYY. Erro: {e}"
             )
 
         if dt_termino <= dt_inicio:
@@ -80,7 +83,8 @@ class ConfiguracaoProjeto:
         if not isinstance(self.percentual_prog, (int, float)) or \
                 not (0 <= self.percentual_prog <= 100):
             raise ValueError(
-                f"Percentual de programação para '{self.nome}' deve estar entre 0 e 100."
+                f"Percentual de programação para '{self.nome}' "
+                f"deve estar entre 0 e 100."
             )
 
     @property
@@ -89,7 +93,7 @@ class ConfiguracaoProjeto:
 
 
 # =============================================================================
-# PARÂMETROS GLOBAIS DE OTIMIZAÇÃO
+# PARÂMETROS GLOBAIS DE OTIMIZAÇÃO (inalterados)
 # =============================================================================
 
 @dataclass
@@ -99,10 +103,14 @@ class ParametrosOtimizacao:
     """
     capacidade_max_instrutor: int = 6
     spread_maximo: int = 4
-    meses_ferias: List[str] = field(default_factory=lambda: ['Jul/26', 'Dez/26'])
+    meses_ferias: List[str] = field(
+        default_factory=lambda: ['Jul/26', 'Dez/26']
+    )
     timeout_segundos: int = 180
 
-    # Pesos e restrições
+    # Pesos — reutilizados no novo Stage 2
+    # peso_instrutores: não mais usado como objetivo primário,
+    #                   mantido por compatibilidade com main.py e pdf_generator
     peso_instrutores: int = 10000
     peso_spread: int = 1
     pico_maximo_turmas: int = 60
@@ -122,7 +130,9 @@ class ParametrosOtimizacao:
             raise ValueError("Timeout deve estar entre 10 e 3600 segundos.")
         if not isinstance(self.peso_instrutores, int) or \
                 not (1 <= self.peso_instrutores <= 100000):
-            raise ValueError("Peso instrutores deve estar entre 1 e 100000.")
+            raise ValueError(
+                "Peso instrutores deve estar entre 1 e 100000."
+            )
         if not isinstance(self.peso_spread, int) or \
                 not (0 <= self.peso_spread <= 10000):
             raise ValueError("Peso spread deve estar entre 0 e 10000.")
@@ -132,7 +142,7 @@ class ParametrosOtimizacao:
 
 
 # =============================================================================
-# MÓDULO FINANCEIRO
+# PARÂMETROS FINANCEIROS (inalterados)
 # =============================================================================
 
 @dataclass
@@ -152,6 +162,11 @@ class ParametrosFinanceiros:
     itens_custo: List[ItemCusto] = field(default_factory=list)
     moeda: str = "BRL"
 
-    def adicionar_custo(self, tipo: str, descricao: str, valor: float,
-                        projeto: Optional[str] = None):
+    def adicionar_custo(
+        self,
+        tipo: str,
+        descricao: str,
+        valor: float,
+        projeto: Optional[str] = None
+    ):
         self.itens_custo.append(ItemCusto(tipo, descricao, valor, projeto))

@@ -1,573 +1,459 @@
 """
-Estágio 2: Alocação de Instrutores por Projeto e Habilidade
-Versão 5.0 - Modelo y[i,p,h] com Homogeneidade e Permanência
+Stage 2: Alocação de Instrutores — Modelo Direto por Turma
 
-MUDANÇAS EM RELAÇÃO À VERSÃO ANTERIOR:
-  - Variável de decisão: x[i,t] (52.800 binárias) → y[i,p,h] (1.440 binárias)
-  - Objetivo: minimizar instrutores + spread → minimizar desvio de carga (L1)
-  - Permanência: instrutor vinculado ao projeto inteiro, não à turma individual
-  - Compartilhamento: instrutor pode atuar em projetos distintos em meses diferentes
-  - Férias: carga zero (instrutor ativo, L[i,m] = 0 em meses de férias)
-  - PROG e ROB resolvidos como subproblemas independentes
-  - Expansão determinística y[i,p,h] → atribuicoes individuais (contrato preservado)
+Versão 5.3 — Correção do upper bound de spread:
+  - max_carga, min_carga e spread_v tinham upper bound =
+    capacidade_max_instrutor (8), que é limite MENSAL.
+  - Carga TOTAL por instrutor é multi-mês e pode chegar a
+    num_turmas — upper bound corrigido para num_turmas.
+  - Causa direta da infeasibility instantânea nas v5.1 e v5.2.
 
-CONTRATO DE SAÍDA (preservado):
-  {
-    'status':           str,
-    'atribuicoes':      List[Dict],  ← {'instrutor': Instrutor, 'turma': Turma}
-    'turmas':           List[Turma],
-    'spread_carga':     int,
-    'spread_detalhado': Dict         ← {'PROG': int, 'ROB': int}
-  }
+Modelo:
+  x[i, t]  ∈ {0,1}  — instrutor i ministra turma t
+  ativo[i] ∈ {0,1}  — instrutor i recebeu ao menos 1 turma
+  max_carga, min_carga, spread_v ∈ [0, num_turmas]
+
+Objetivo:
+  Minimizar spread (max_carga - min_carga) + instrutores ativos
+
+Contrato de saída preservado:
+  {'atribuicoes', 'turmas', 'spread_carga', 'spread_detalhado'}
 """
 
 from ortools.linear_solver import pywraplp
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
+from collections import defaultdict
 import math
+
 from ..data_models import Projeto, Turma, Instrutor, ParametrosOtimizacao
-from ..utils import calcular_meses_ativos, calcular_lower_bounds
+from ..utils import calcular_meses_ativos
 
 
 # =============================================================================
-# EXPANSÃO DETERMINÍSTICA — y[i,p,h] → atribuicoes individuais
-# =============================================================================
-
-def _expandir_atribuicoes(
-        vinculacoes: List[Dict],
-        turmas_objetos: List[Turma],
-        meses_ferias_idx: List[int],
-        num_meses: int) -> List[Dict]:
-    """
-    Converte vinculações de alto nível em atribuições individuais turma→instrutor.
-
-    vinculacoes: [{'instrutor': Instrutor, 'projeto': str, 'habilidade': str}]
-
-    Para cada projeto+habilidade, distribui as turmas igualmente entre
-    os instrutores vinculados — exatamente a lógica da planilha manual.
-
-    Retorna List[{'instrutor': Instrutor, 'turma': Turma}]
-    """
-    atribuicoes = []
-
-    # Agrupar turmas por (projeto, habilidade)
-    turmas_por_ph = {}
-    for turma in turmas_objetos:
-        chave = (turma.projeto, turma.habilidade)
-        if chave not in turmas_por_ph:
-            turmas_por_ph[chave] = []
-        turmas_por_ph[chave].append(turma)
-
-    # Agrupar instrutores vinculados por (projeto, habilidade)
-    instrutores_por_ph = {}
-    for vinc in vinculacoes:
-        chave = (vinc['projeto'], vinc['habilidade'])
-        if chave not in instrutores_por_ph:
-            instrutores_por_ph[chave] = []
-        instrutores_por_ph[chave].append(vinc['instrutor'])
-
-    # Distribuição round-robin por mês letivo para máxima homogeneidade
-    for chave, turmas in turmas_por_ph.items():
-        instrutores = instrutores_por_ph.get(chave, [])
-        if not instrutores:
-            continue
-
-        # Ordenar turmas por mês de início para distribuição consistente
-        turmas_ordenadas = sorted(turmas, key=lambda t: t.mes_inicio)
-        n_inst = len(instrutores)
-
-        for idx_t, turma in enumerate(turmas_ordenadas):
-            # Round-robin: distribui ciclicamente entre instrutores
-            instrutor = instrutores[idx_t % n_inst]
-            atribuicoes.append({
-                'instrutor': instrutor,
-                'turma': turma
-            })
-
-    return atribuicoes
-
-
-# =============================================================================
-# SUBPROBLEMA POR HABILIDADE
-# =============================================================================
-
-def _resolver_subproblema(
-        habilidade: str,
-        projetos: List[Projeto],
-        turmas_h: List[Turma],
-        meses: List[str],
-        meses_ferias_idx: List[int],
-        capacidade: int,
-        lb_global: int,
-        timeout_ms: int) -> Tuple[List[Dict], int]:
-    """
-    Resolve o subproblema de alocação para uma habilidade específica.
-
-    Modelo:
-      y[i, p] ∈ {0,1}  — instrutor i vinculado ao projeto p
-      L[i, m] ≥ 0       — carga mensal do instrutor i no mês m
-      d+[i,m], d-[i,m]  — desvio positivo/negativo da carga média
-
-    Objetivo: minimizar Σ(d+[i,m] + d-[i,m])  — norma L1 (homogeneidade)
-    Secundário: minimizar ociosidade (meses sem carga fora de férias)
-
-    Retorna:
-      vinculacoes: [{'instrutor': Instrutor, 'projeto': str, 'habilidade': str}]
-      desvio_max:  int  (usado como spread_carga no contrato de saída)
-    """
-    num_meses = len(meses)
-
-    # Projetos com turmas desta habilidade
-    projetos_h = [
-        p for p in projetos
-        if (habilidade == 'PROG' and p.prog > 0) or
-           (habilidade == 'ROB' and p.rob > 0)
-    ]
-
-    if not projetos_h or not turmas_h:
-        return [], 0
-
-    # Número de instrutores no pool: LB global + margem de segurança
-    n_pool = max(lb_global + 5, len(turmas_h))
-    prefixo = habilidade if habilidade == 'PROG' else 'ROB'
-
-    instrutores_pool = [
-        Instrutor(
-            id=f"{prefixo}_{i + 1}",
-            habilidade=habilidade,
-            capacidade=capacidade,
-            laboratorio_id="LAB_PADRAO"
-        )
-        for i in range(n_pool)
-    ]
-
-    n_inst = len(instrutores_pool)
-    n_proj = len(projetos_h)
-
-    print(f"\n  [{habilidade}] Pool: {n_inst} instrutores | "
-          f"Projetos: {n_proj} | "
-          f"Turmas: {len(turmas_h)} | "
-          f"LB: ≥{lb_global}")
-
-    # -------------------------------------------------------------------------
-    # Pré-cálculo: carga mensal por projeto (turmas ativas em cada mês)
-    # -------------------------------------------------------------------------
-    # carga_projeto_mes[p_idx][m] = número de turmas ativas do projeto p no mês m
-    carga_projeto_mes = {}
-    for p_idx, proj in enumerate(projetos_h):
-        carga_projeto_mes[p_idx] = [0] * num_meses
-        for turma in turmas_h:
-            nome_base = turma.projeto.split('_Onda')[0]
-            proj_base = proj.nome.split('_Onda')[0]
-            if nome_base != proj_base:
-                continue
-            meses_ativos = calcular_meses_ativos(
-                turma.mes_inicio, turma.duracao,
-                meses_ferias_idx, num_meses
-            )
-            for m in meses_ativos:
-                carga_projeto_mes[p_idx][m] += 1
-
-    # Carga média alvo por instrutor por projeto (meses letivos apenas)
-    media_alvo = {}
-    for p_idx, proj in enumerate(projetos_h):
-        total_turmas_proj = sum(carga_projeto_mes[p_idx])
-        meses_letivos = [
-            m for m in range(num_meses)
-            if m not in meses_ferias_idx and carga_projeto_mes[p_idx][m] > 0
-        ]
-        if not meses_letivos:
-            media_alvo[p_idx] = 0.0
-            continue
-        # Será dividido pelo número de instrutores vinculados (calculado pós-solver)
-        media_alvo[p_idx] = total_turmas_proj  # numerador — denominador após solver
-
-    # -------------------------------------------------------------------------
-    # SOLVER
-    # -------------------------------------------------------------------------
-    solver = pywraplp.Solver.CreateSolver('SCIP')
-    if not solver:
-        raise RuntimeError("Solver SCIP não encontrado")
-
-    solver.SetTimeLimit(timeout_ms)
-
-    # --- Variáveis principais ---
-    # y[i, p] = 1 se instrutor i está vinculado ao projeto p
-    y = {}
-    for i in range(n_inst):
-        for p in range(n_proj):
-            y[i, p] = solver.BoolVar(f'y_{i}_{p}')
-
-    # ativo[i] = 1 se instrutor i tem pelo menos um projeto
-    ativo = [solver.BoolVar(f'ativo_{i}') for i in range(n_inst)]
-
-    # L[i, m] = carga do instrutor i no mês m (contínua, ≥ 0)
-    L = {}
-    for i in range(n_inst):
-        for m in range(num_meses):
-            L[i, m] = solver.NumVar(0, capacidade, f'L_{i}_{m}')
-
-    # d+[i,m], d-[i,m] = desvio da carga média (norma L1)
-    dp = {}
-    dm = {}
-    for i in range(n_inst):
-        for m in range(num_meses):
-            if m not in meses_ferias_idx:
-                dp[i, m] = solver.NumVar(0, capacidade, f'dp_{i}_{m}')
-                dm[i, m] = solver.NumVar(0, capacidade, f'dm_{i}_{m}')
-
-    # --- R1: Ativação ---
-    # Se y[i,p] = 1 para qualquer p → ativo[i] = 1
-    for i in range(n_inst):
-        solver.Add(
-            solver.Sum([y[i, p] for p in range(n_proj)]) <=
-            n_proj * ativo[i]
-        )
-        solver.Add(
-            solver.Sum([y[i, p] for p in range(n_proj)]) >=
-            ativo[i]
-        )
-
-    # --- R2: Cobertura mínima de instrutores por projeto ---
-    # Cada projeto precisa de pelo menos 1 instrutor vinculado
-    for p in range(n_proj):
-        solver.Add(
-            solver.Sum([y[i, p] for i in range(n_inst)]) >= 1
-        )
-
-    # --- R3: Definição da carga mensal ---
-    # L[i,m] = Σ_p (y[i,p] * carga_projeto_mes[p][m] / n_vinculados_p)
-    # Como n_vinculados é variável, usamos formulação linear:
-    # L[i,m] * n_vinculados_p >= y[i,p] * carga_projeto_mes[p][m]
-    # Abordagem prática: L[i,m] = Σ_p y[i,p] * (carga_projeto_mes[p][m] / LB_p)
-    # onde LB_p é o lower bound de instrutores para o projeto p (piso seguro)
-    for p_idx, proj in enumerate(projetos_h):
-        # LB por projeto: ceil(total_turmas / capacidade)
-        total_proj = sum(carga_projeto_mes[p_idx])
-        lb_p = max(1, math.ceil(total_proj / capacidade))
-
-        for i in range(n_inst):
-            for m in range(num_meses):
-                carga_m = carga_projeto_mes[p_idx][m]
-                if carga_m == 0:
-                    continue
-                # Contribuição do projeto p para a carga do instrutor i no mês m
-                # Usa LB como denominador conservador (evita divisão por variável)
-                contribuicao = carga_m / lb_p
-                solver.Add(
-                    L[i, m] >= y[i, p_idx] * contribuicao
-                )
-
-    # --- R4: Capacidade mensal ---
-    for i in range(n_inst):
-        for m in range(num_meses):
-            if m in meses_ferias_idx:
-                # Férias = carga zero (Q3): instrutor ativo mas sem turmas
-                solver.Add(L[i, m] == 0)
-            else:
-                solver.Add(L[i, m] <= capacidade * ativo[i])
-
-    # --- R5: Linearização do desvio (norma L1) ---
-    # Para meses letivos: L[i,m] - media_ref = d+[i,m] - d-[i,m]
-    # media_ref: estimativa baseada em LB global
-    media_ref = (
-        sum(sum(carga_projeto_mes[p][m] for p in range(n_proj))
-            for m in range(num_meses) if m not in meses_ferias_idx)
-        / max(1, lb_global)
-        / max(1, len([m for m in range(num_meses)
-                      if m not in meses_ferias_idx]))
-    )
-
-    for i in range(n_inst):
-        for m in range(num_meses):
-            if m in meses_ferias_idx:
-                continue
-            # d+[i,m] - d-[i,m] = L[i,m] - media_ref * ativo[i]
-            solver.Add(
-                dp[i, m] - dm[i, m] ==
-                L[i, m] - media_ref * ativo[i]
-            )
-
-    # --- R6: Simetria — instrutores ativos preenchem do índice 0 ---
-    # Quebra de simetria: evita que o solver explore permutações equivalentes
-    # Forçar ativo[0] >= ativo[1] >= ... >= ativo[n-1]
-    for i in range(n_inst - 1):
-        solver.Add(ativo[i] >= ativo[i + 1])
-
-    # -------------------------------------------------------------------------
-    # FUNÇÃO OBJETIVO
-    # -------------------------------------------------------------------------
-    # Nível 1 (peso alto): minimizar desvio L1 (homogeneidade)
-    # Nível 2 (peso baixo): minimizar instrutores ativos (eficiência)
-    peso_homogeneidade = 1000
-    peso_instrutores = 1
-
-    obj_homogeneidade = solver.Sum([
-        dp[i, m] + dm[i, m]
-        for i in range(n_inst)
-        for m in range(num_meses)
-        if m not in meses_ferias_idx
-    ])
-
-    obj_instrutores = solver.Sum(ativo)
-
-    solver.Minimize(
-        peso_homogeneidade * obj_homogeneidade +
-        peso_instrutores * obj_instrutores
-    )
-
-    # -------------------------------------------------------------------------
-    # RESOLUÇÃO
-    # -------------------------------------------------------------------------
-    print(f"  [{habilidade}] Resolvendo ({timeout_ms // 1000}s timeout)...")
-    status_solver = solver.Solve()
-
-    if status_solver not in [
-        pywraplp.Solver.OPTIMAL,
-        pywraplp.Solver.FEASIBLE
-    ]:
-        print(f"  [{habilidade}] ✗ Sem solução viável — usando fallback")
-        # Fallback: 1 instrutor por projeto com todas as turmas
-        vinculacoes_fallback = []
-        for p_idx, proj in enumerate(projetos_h):
-            inst = instrutores_pool[p_idx % n_pool]
-            vinculacoes_fallback.append({
-                'instrutor': inst,
-                'projeto': proj.nome,
-                'habilidade': habilidade
-            })
-        return vinculacoes_fallback, 0
-
-    # Coletar vinculações
-    vinculacoes = []
-    instrutores_usados = set()
-
-    for i in range(n_inst):
-        for p in range(n_proj):
-            if y[i, p].solution_value() > 0.5:
-                vinculacoes.append({
-                    'instrutor': instrutores_pool[i],
-                    'projeto': projetos_h[p].nome,
-                    'habilidade': habilidade
-                })
-                instrutores_usados.add(i)
-
-    # Calcular desvio máximo real
-    desvio_max = 0
-    for i in instrutores_usados:
-        for m in range(num_meses):
-            if m not in meses_ferias_idx:
-                d = abs(
-                    dp[i, m].solution_value() -
-                    dm[i, m].solution_value()
-                )
-                desvio_max = max(desvio_max, d)
-
-    print(
-        f"  [{habilidade}] ✓ "
-        f"{len(instrutores_usados)} instrutores alocados | "
-        f"Desvio máximo: {desvio_max:.2f}"
-    )
-
-    # Log de vinculações
-    for v in vinculacoes:
-        print(
-            f"    {v['instrutor'].id} → {v['projeto']}"
-        )
-
-    return vinculacoes, int(math.ceil(desvio_max))
-
-
-# =============================================================================
-# FUNÇÃO PRINCIPAL — CONTRATO PRESERVADO
+# FUNÇÃO PRINCIPAL
 # =============================================================================
 
 def otimizar_atribuicao_e_carga(
-        cronograma_estagio1: List[Dict],
-        projetos: List[Projeto],
-        meses: List[str],
-        meses_ferias_idx: List[int],
-        parametros: ParametrosOtimizacao) -> Dict[str, Any]:
-    """
-    Estágio 2 v5.0: Aloca instrutores por projeto e habilidade.
-
-    Modelo y[i,p,h] substitui x[i,t]:
-      - 98% menos variáveis binárias
-      - Homogeneidade como objetivo primário
-      - Permanência por projeto implícita na variável de decisão
-      - Compartilhamento entre projetos permitido (Q1)
-      - Férias = carga zero (Q3)
-      - PROG e ROB como subproblemas independentes (Q4)
-
-    Contrato de saída idêntico ao Stage 2 v4.4.
-    """
+    cronograma_estagio1: List[Dict],
+    projetos: List[Projeto],
+    meses: List[str],
+    meses_ferias_idx: List[int],
+    parametros: ParametrosOtimizacao
+) -> Dict[str, Any]:
 
     print("\n" + "=" * 80)
-    print("STAGE 2: ALOCAÇÃO DE INSTRUTORES (v5.0 — Modelo por Projeto)")
+    print("STAGE 2: ALOCAÇÃO DE INSTRUTORES — Modelo Direto (v5.3)")
     print("=" * 80)
 
-    solver_check = pywraplp.Solver.CreateSolver('SCIP')
-    if not solver_check:
+    if not pywraplp.Solver.CreateSolver('SCIP'):
         return {"status": "falha", "erro": "Solver SCIP não encontrado"}
 
     num_meses = len(meses)
-    timeout_ms = parametros.timeout_segundos * 1000
 
     # =========================================================================
-    # 1. RECONSTRUÇÃO DE TURMAS (idêntica à versão anterior)
-    #    Garante compatibilidade com o contrato de saída
+    # 1. CRIAÇÃO DAS TURMAS
+    # Habilidade explícita — sem fallback 'MISTA'
     # =========================================================================
-    turmas_objetos = []
+    turmas_objetos: List[Turma] = []
     for item in cronograma_estagio1:
-        hab_limpa = str(item.get('habilidade', 'PROG')).upper()
-        if hab_limpa not in ['PROG', 'ROBOTICA']:
-            hab_limpa = 'PROG'
-
+        hab = str(item.get('habilidade', '')).upper()
+        if hab not in ['PROG', 'ROBOTICA']:
+            print(
+                f"  [AVISO] Habilidade inválida '{hab}' — ignorado."
+            )
+            continue
         for _ in range(item['qtd']):
-            t = Turma(
+            turmas_objetos.append(Turma(
                 id=len(turmas_objetos),
                 projeto=item['projeto_nome'],
+                habilidade=hab,
                 mes_inicio=item['mes_inicio'],
-                duracao=item['duracao'],
-                habilidade=hab_limpa
-            )
-            turmas_objetos.append(t)
+                duracao=item['duracao']
+            ))
 
     num_turmas = len(turmas_objetos)
     if num_turmas == 0:
         return {"status": "falha", "erro": "Nenhuma turma para alocar"}
 
-    # =========================================================================
-    # 2. SEPARAÇÃO DE TURMAS POR HABILIDADE
-    #    Nota: Stage 1 retorna habilidade 'MISTA' — distribuímos aqui
-    #    proporcionalmente ao percentual_prog de cada projeto
-    # =========================================================================
-    # Mapear projeto → percentual_prog
-    perc_prog_por_projeto = {}
-    for proj in projetos:
-        nome_base = proj.nome.split('_Onda')[0]
-        total = proj.prog + proj.rob
-        if total > 0:
-            perc_prog_por_projeto[nome_base] = proj.prog / total
-        else:
-            perc_prog_por_projeto[nome_base] = 1.0
+    turmas_prog = [t for t in turmas_objetos if t.habilidade == 'PROG']
+    turmas_rob  = [t for t in turmas_objetos if t.habilidade == 'ROBOTICA']
 
-    # Re-atribuir habilidade MISTA baseado no percentual do projeto
-    turmas_finais = []
-    contagem_por_proj_hab = {}
-
-    for turma in turmas_objetos:
-        nome_base = turma.projeto.split('_Onda')[0]
-        chave = (turma.projeto, 'PROG')
-        chave_rob = (turma.projeto, 'ROB')
-
-        if turma.habilidade == 'MISTA':
-            perc = perc_prog_por_projeto.get(nome_base, 1.0)
-            # Conta quantas já foram alocadas como PROG para este projeto
-            n_prog = contagem_por_proj_hab.get(turma.projeto, {}).get('PROG', 0)
-            n_rob = contagem_por_proj_hab.get(turma.projeto, {}).get('ROB', 0)
-            total_proj = n_prog + n_rob
-
-            # Decide PROG ou ROB baseado na proporção acumulada
-            if total_proj == 0:
-                hab_real = 'PROG' if perc >= 0.5 else 'ROBOTICA'
-            else:
-                perc_prog_atual = n_prog / total_proj
-                hab_real = 'PROG' if perc_prog_atual < perc else 'ROBOTICA'
-
-            if turma.projeto not in contagem_por_proj_hab:
-                contagem_por_proj_hab[turma.projeto] = {'PROG': 0, 'ROB': 0}
-            if hab_real == 'PROG':
-                contagem_por_proj_hab[turma.projeto]['PROG'] += 1
-            else:
-                contagem_por_proj_hab[turma.projeto]['ROB'] += 1
-
-            turma = Turma(
-                id=turma.id,
-                projeto=turma.projeto,
-                habilidade=hab_real,
-                mes_inicio=turma.mes_inicio,
-                duracao=turma.duracao
-            )
-
-        turmas_finais.append(turma)
-
-    turmas_prog = [t for t in turmas_finais if t.habilidade == 'PROG']
-    turmas_rob = [t for t in turmas_finais if t.habilidade == 'ROBOTICA']
-
-    print(f"\nTurmas: {len(turmas_prog)} PROG | {len(turmas_rob)} ROB")
+    print(f"\n  Total de turmas: {num_turmas}")
+    print(f"    PROG:     {len(turmas_prog)}")
+    print(f"    ROBOTICA: {len(turmas_rob)}")
 
     # =========================================================================
-    # 3. LOWER BOUNDS AUTOMÁTICOS (Q5)
+    # 2. DIMENSIONAMENTO DO POOL — baseado no pico real por habilidade
     # =========================================================================
-    lbs = calcular_lower_bounds(
-        projetos, meses, meses_ferias_idx,
-        parametros.capacidade_max_instrutor
+    pool_prog = _dimensionar_pool(
+        turmas_prog, meses_ferias_idx, num_meses,
+        parametros.capacidade_max_instrutor, 'PROG'
+    )
+    pool_rob = _dimensionar_pool(
+        turmas_rob, meses_ferias_idx, num_meses,
+        parametros.capacidade_max_instrutor, 'ROBOTICA'
     )
 
-    lb_prog = lbs['global']['PROG']
-    lb_rob = lbs['global']['ROB']
+    instrutores: List[Instrutor] = []
+    for k in range(pool_prog):
+        instrutores.append(Instrutor(
+            id=f"PROG_{k + 1}",
+            habilidade='PROG',
+            capacidade=parametros.capacidade_max_instrutor,
+            laboratorio_id="LAB_PADRAO"
+        ))
+    for k in range(pool_rob):
+        instrutores.append(Instrutor(
+            id=f"ROB_{k + 1}",
+            habilidade='ROBOTICA',
+            capacidade=parametros.capacidade_max_instrutor,
+            laboratorio_id="LAB_PADRAO"
+        ))
+
+    print(f"\n  Pool de instrutores: {len(instrutores)}")
+    print(f"    PROG:     {pool_prog}")
+    print(f"    ROBOTICA: {pool_rob}")
 
     # =========================================================================
-    # 4. RESOLVER SUBPROBLEMAS INDEPENDENTES (Q4)
+    # 3. RESOLVER SUBPROBLEMAS INDEPENDENTES
     # =========================================================================
-    timeout_por_subproblema = timeout_ms // 2
-
-    print("\n[SUBPROBLEMA PROG]")
-    vinculacoes_prog, desvio_prog = _resolver_subproblema(
+    atribuicoes_prog, desvio_prog = _resolver_subproblema(
         habilidade='PROG',
-        projetos=projetos,
-        turmas_h=turmas_prog,
+        turmas=turmas_prog,
+        instrutores=[i for i in instrutores if i.habilidade == 'PROG'],
         meses=meses,
         meses_ferias_idx=meses_ferias_idx,
-        capacidade=parametros.capacidade_max_instrutor,
-        lb_global=lb_prog,
-        timeout_ms=timeout_por_subproblema
+        parametros=parametros
     )
 
-    print("\n[SUBPROBLEMA ROB]")
-    vinculacoes_rob, desvio_rob = _resolver_subproblema(
+    atribuicoes_rob, desvio_rob = _resolver_subproblema(
         habilidade='ROBOTICA',
-        projetos=projetos,
-        turmas_h=turmas_rob,
+        turmas=turmas_rob,
+        instrutores=[i for i in instrutores if i.habilidade == 'ROBOTICA'],
         meses=meses,
         meses_ferias_idx=meses_ferias_idx,
-        capacidade=parametros.capacidade_max_instrutor,
-        lb_global=lb_rob,
-        timeout_ms=timeout_por_subproblema
+        parametros=parametros
     )
 
-    todas_vinculacoes = vinculacoes_prog + vinculacoes_rob
-
-    if not todas_vinculacoes:
+    # =========================================================================
+    # 4. CONSOLIDAR RESULTADOS
+    # =========================================================================
+    if atribuicoes_prog is None and atribuicoes_rob is None:
         return {
             "status": "falha",
-            "erro": "Nenhuma vinculação encontrada em ambos os subproblemas"
+            "erro":   "Nenhum subproblema encontrou solução viável."
         }
 
-    # =========================================================================
-    # 5. EXPANSÃO DETERMINÍSTICA → atribuicoes individuais (contrato)
-    # =========================================================================
-    print("\n[EXPANSÃO] Distribuindo turmas entre instrutores vinculados...")
+    atribuicoes_total = []
+    if atribuicoes_prog:
+        atribuicoes_total.extend(atribuicoes_prog)
+    if atribuicoes_rob:
+        atribuicoes_total.extend(atribuicoes_rob)
 
-    atribuicoes = _expandir_atribuicoes(
-        todas_vinculacoes,
-        turmas_finais,
-        meses_ferias_idx,
-        num_meses
+    desvio_max = max(
+        desvio_prog if desvio_prog is not None else 0,
+        desvio_rob  if desvio_rob  is not None else 0
     )
 
-    print(f"  ✓ {len(atribuicoes)} atribuições geradas")
+    inst_prog_ativos = len({
+        a['instrutor'].id for a in atribuicoes_total
+        if a['instrutor'].habilidade == 'PROG'
+    })
+    inst_rob_ativos = len({
+        a['instrutor'].id for a in atribuicoes_total
+        if a['instrutor'].habilidade == 'ROBOTICA'
+    })
 
-    # =========================================================================
-    # 6. RETORNO — CONTRATO PRESERVADO
-    # =========================================================================
+    print(f"\n[✓] Resultados Stage 2:")
+    print(f"  Atribuições totais:   {len(atribuicoes_total)}")
+    print(f"  Instrutores PROG:     {inst_prog_ativos}")
+    print(f"  Instrutores ROBOTICA: {inst_rob_ativos}")
+    print(f"  Desvio PROG:          {desvio_prog}")
+    print(f"  Desvio ROBOTICA:      {desvio_rob}")
+    print(f"  Desvio máximo:        {desvio_max}")
+
     return {
         "status":           "sucesso",
-        "atribuicoes":      atribuicoes,
-        "turmas":           turmas_finais,   # lista completa de Turma
-        "spread_carga":     max(desvio_prog, desvio_rob),
+        "atribuicoes":      atribuicoes_total,
+        "turmas":           turmas_objetos,
+        "spread_carga":     desvio_max,
         "spread_detalhado": {
-            "PROG":     desvio_prog,
-            "ROB":      desvio_rob
+            "PROG": desvio_prog if desvio_prog is not None else 0,
+            "ROB":  desvio_rob  if desvio_rob  is not None else 0
         }
     }
+
+
+# =============================================================================
+# DIMENSIONAMENTO DO POOL
+# =============================================================================
+
+def _dimensionar_pool(
+    turmas: List[Turma],
+    meses_ferias_idx: List[int],
+    num_meses: int,
+    capacidade: int,
+    habilidade: str
+) -> int:
+    """
+    Calcula o tamanho do pool baseado no pico real de demanda
+    mensal para a habilidade informada.
+
+    Pool = ceil(pico / capacidade) + margem 30%
+    Garante viabilidade matemática do subproblema.
+    """
+    if not turmas:
+        return 0
+
+    demanda_por_mes: Dict[int, int] = defaultdict(int)
+    for t in turmas:
+        for m in calcular_meses_ativos(
+            t.mes_inicio, t.duracao, meses_ferias_idx, num_meses
+        ):
+            demanda_por_mes[m] += 1
+
+    if not demanda_por_mes:
+        return math.ceil(len(turmas) / capacidade) + 2
+
+    pico    = max(demanda_por_mes.values())
+    minimo  = math.ceil(pico / capacidade)
+    pool    = minimo + max(2, math.ceil(minimo * 0.30))
+
+    print(
+        f"\n  Pool {habilidade}: pico={pico} turmas/mês → "
+        f"mínimo={minimo} instrutores → pool={pool} (margem 30%)"
+    )
+    return pool
+
+
+# =============================================================================
+# SUBPROBLEMA POR HABILIDADE — MODELO DIRETO x[i,t]
+# =============================================================================
+
+def _resolver_subproblema(
+    habilidade: str,
+    turmas: List[Turma],
+    instrutores: List[Instrutor],
+    meses: List[str],
+    meses_ferias_idx: List[int],
+    parametros: ParametrosOtimizacao
+) -> Tuple[Optional[List[Dict]], Optional[int]]:
+    """
+    Resolve o subproblema de alocação para uma habilidade.
+
+    Modelo direto:
+      x[i, t]  ∈ {0,1}  — instrutor i ministra turma t
+      ativo[i] ∈ {0,1}  — instrutor i recebeu ao menos 1 turma
+      max_carga, min_carga, spread_v ∈ [0, num_turmas]
+                                              ↑
+                              CORRIGIDO v5.3: era capacidade_max_instrutor
+                              (limite mensal ≠ carga total multi-mês)
+
+    Restrições:
+      R1: cobertura   — cada turma tem exatamente 1 instrutor
+      R2: capacidade  — carga mensal ≤ capacidade_max
+      R3: férias      — carga em meses de férias = 0
+      R4: ativação    — ativo[i] = 1 ↔ alguma turma atribuída
+      R5: spread      — max e min sobre instrutores ativos
+
+    Objetivo:
+      Minimizar spread + peso × instrutores ativos
+    """
+
+    if not turmas:
+        print(f"\n  [{habilidade}] Sem turmas — ignorado.")
+        return [], 0
+
+    if not instrutores:
+        print(f"\n  [{habilidade}] Pool vazio.")
+        return None, None
+
+    print(f"\n{'=' * 60}")
+    print(f"  Subproblema: {habilidade}")
+    print(
+        f"  Turmas: {len(turmas)} | "
+        f"Instrutores no pool: {len(instrutores)}"
+    )
+
+    solver = pywraplp.Solver.CreateSolver('SCIP')
+    solver.SetTimeLimit(parametros.timeout_segundos * 1000)
+
+    num_meses  = len(meses)
+    num_turmas = len(turmas)
+    num_inst   = len(instrutores)
+
+    meses_letivos = [
+        m for m in range(num_meses)
+        if m not in meses_ferias_idx
+    ]
+
+    # Pré-calcular meses ativos por turma
+    meses_ativos_turma: Dict[int, List[int]] = {}
+    for t_idx, t in enumerate(turmas):
+        meses_ativos_turma[t_idx] = calcular_meses_ativos(
+            t.mes_inicio, t.duracao, meses_ferias_idx, num_meses
+        )
+
+    # Pré-calcular turmas ativas por mês
+    turmas_no_mes: Dict[int, List[int]] = defaultdict(list)
+    for t_idx, ma in meses_ativos_turma.items():
+        for m in ma:
+            turmas_no_mes[m].append(t_idx)
+
+    # Log de projetos presentes
+    projetos_presentes: Dict[str, int] = defaultdict(int)
+    for t in turmas:
+        projetos_presentes[t.projeto.split('_Onda')[0]] += 1
+    print(f"  Projetos com turmas {habilidade}:")
+    for pai, qtd in sorted(projetos_presentes.items()):
+        print(f"    {pai}: {qtd} turmas")
+
+    # =========================================================================
+    # VARIÁVEIS
+    # =========================================================================
+
+    # x[i, t] — atribuição instrutor → turma
+    x = {}
+    for i in range(num_inst):
+        for t in range(num_turmas):
+            x[i, t] = solver.BoolVar(f'x_{i}_{t}')
+
+    # ativo[i] — instrutor recebeu pelo menos 1 turma
+    ativo = [solver.BoolVar(f'ativo_{i}') for i in range(num_inst)]
+
+    # Spread — CORRIGIDO: upper bound = num_turmas (carga TOTAL multi-mês)
+    #          não capacidade_max_instrutor (que é limite MENSAL)
+    max_carga = solver.IntVar(0, num_turmas, 'max_carga')  # ← CORRIGIDO
+    min_carga = solver.IntVar(0, num_turmas, 'min_carga')  # ← CORRIGIDO
+    spread_v  = solver.IntVar(0, num_turmas, 'spread')     # ← CORRIGIDO
+
+    # =========================================================================
+    # RESTRIÇÕES
+    # =========================================================================
+
+    # R1: Cobertura — cada turma tem exatamente 1 instrutor
+    for t in range(num_turmas):
+        solver.Add(
+            solver.Sum([x[i, t] for i in range(num_inst)]) == 1
+        )
+
+    # R2: Capacidade mensal — carga no mês ≤ capacidade_max_instrutor
+    for i in range(num_inst):
+        for m in meses_letivos:
+            t_no_mes = turmas_no_mes.get(m, [])
+            if t_no_mes:
+                solver.Add(
+                    solver.Sum([x[i, t] for t in t_no_mes])
+                    <= parametros.capacidade_max_instrutor
+                )
+
+    # R3: Férias — sem turmas em meses de férias
+    for i in range(num_inst):
+        for m in meses_ferias_idx:
+            t_no_mes = turmas_no_mes.get(m, [])
+            if t_no_mes:
+                solver.Add(
+                    solver.Sum([x[i, t] for t in t_no_mes]) == 0
+                )
+
+    # R4: Ativação
+    for i in range(num_inst):
+        carga_total = solver.Sum([x[i, t] for t in range(num_turmas)])
+        # ativo=0 → carga=0
+        solver.Add(carga_total <= num_turmas * ativo[i])
+        # carga>0 → ativo=1
+        solver.Add(carga_total >= ativo[i])
+
+    # R5: Spread sobre carga TOTAL por instrutor
+    for i in range(num_inst):
+        carga_total = solver.Sum([x[i, t] for t in range(num_turmas)])
+        # max_carga >= carga de qualquer instrutor
+        solver.Add(max_carga >= carga_total)
+        # min_carga <= carga de instrutores ATIVOS
+        # Big-M: se ativo=0, restrição relaxada
+        solver.Add(
+            min_carga <= carga_total + (1 - ativo[i]) * num_turmas
+        )
+
+    solver.Add(spread_v == max_carga - min_carga)
+
+    # =========================================================================
+    # FUNÇÃO OBJETIVO
+    # Prioridade 1: minimizar spread (homogeneidade de carga total)
+    # Prioridade 2: minimizar instrutores ativos (eficiência)
+    # =========================================================================
+    solver.Minimize(
+        parametros.peso_spread        * spread_v
+        + parametros.peso_instrutores * solver.Sum(ativo)
+    )
+
+    # =========================================================================
+    # RESOLUÇÃO
+    # =========================================================================
+    print(f"  Resolvendo subproblema {habilidade}...")
+    status = solver.Solve()
+
+    if status not in [
+        pywraplp.Solver.OPTIMAL,
+        pywraplp.Solver.FEASIBLE
+    ]:
+        print(
+            f"  [ERRO] Subproblema {habilidade} "
+            f"sem solução viável."
+        )
+        return None, None
+
+    status_str = (
+        "ÓTIMO" if status == pywraplp.Solver.OPTIMAL
+        else "VIÁVEL"
+    )
+    print(f"  ✓ Solução {habilidade} encontrada! [{status_str}]")
+
+    # =========================================================================
+    # EXTRAÇÃO DAS ATRIBUIÇÕES
+    # =========================================================================
+    atribuicoes: List[Dict] = []
+    for i in range(num_inst):
+        for t_idx in range(num_turmas):
+            if x[i, t_idx].solution_value() > 0.5:
+                atribuicoes.append({
+                    'instrutor': instrutores[i],
+                    'turma':     turmas[t_idx]
+                })
+
+    # ── Estatísticas da solução ───────────────────────────────────────────────
+    desvio_real = int(spread_v.solution_value())
+    inst_ativos = sum(
+        1 for i in range(num_inst)
+        if ativo[i].solution_value() > 0.5
+    )
+
+    cargas = [
+        int(sum(x[i, t].solution_value() for t in range(num_turmas)))
+        for i in range(num_inst)
+        if ativo[i].solution_value() > 0.5
+    ]
+    if cargas:
+        print(f"\n  Distribuição de carga {habilidade}:")
+        print(
+            f"    Min: {min(cargas)} | Max: {max(cargas)} | "
+            f"Média: {sum(cargas) / len(cargas):.1f} turmas/instrutor"
+        )
+
+    # ── Distribuição por projeto (permanência emergente) ─────────────────────
+    print(f"\n  Atribuições por projeto {habilidade}:")
+    proj_inst: Dict[str, set] = defaultdict(set)
+    for atr in atribuicoes:
+        pai = atr['turma'].projeto.split('_Onda')[0]
+        proj_inst[pai].add(atr['instrutor'].id)
+    for pai, inst_set in sorted(proj_inst.items()):
+        print(
+            f"    {pai}: {len(inst_set)} instrutor(es) → "
+            f"{sorted(inst_set)}"
+        )
+
+    print(f"\n  Instrutores ativos ({habilidade}): {inst_ativos}")
+    print(f"  Spread {habilidade}:                {desvio_real}")
+    print(f"  Atribuições {habilidade}:            {len(atribuicoes)}")
+
+    return atribuicoes, desvio_real
