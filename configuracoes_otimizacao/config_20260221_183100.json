@@ -1,0 +1,80 @@
+{
+  "metadata": {
+    "nome": "config_20260221_115225",
+    "data_criacao": "2026-02-21T18:31:00.00000",
+    "versao": "3.1"
+  },
+  "parametros": {
+    "capacidade_max_instrutor": 6,
+    "spread_maximo": 10,
+    "meses_ferias": [
+      "Jul/26",
+      "Dez/26"
+    ],
+    "timeout_segundos": 180,
+    "peso_instrutores": 10000,
+    "peso_spread": 1,
+    "pico_maximo_turmas": 250
+  },
+  "projetos": [
+    {
+      "nome": "DD1",
+      "data_inicio": "01/01/2026",
+      "data_termino": "28/02/2026",
+      "num_turmas": 6,
+      "duracao_curso": 2,
+      "ondas": 1,
+      "percentual_prog": 100.0,
+      "turmas_min_por_mes": 1,
+      "mes_inicio_idx": 0,
+      "mes_termino_idx": 3
+    },
+    {
+      "nome": "DD2",
+      "data_inicio": "01/03/2026",
+      "data_termino": "30/04/2027",
+      "num_turmas": 110,
+      "duracao_curso": 4,
+      "ondas": 3,
+      "percentual_prog": 60.0,
+      "turmas_min_por_mes": 1,
+      "mes_inicio_idx": 2,
+      "mes_termino_idx": 15
+    },
+    {
+      "nome": "PAM",
+      "data_inicio": "01/03/2026",
+      "data_termino": "30/06/2026",
+      "num_turmas": 9,
+      "duracao_curso": 4,
+      "ondas": 1,
+      "percentual_prog": 100.0,
+      "turmas_min_por_mes": 1,
+      "mes_inicio_idx": 2,
+      "mes_termino_idx": 5
+    },
+    {
+      "nome": "IT",
+      "data_inicio": "01/04/2026",
+      "data_termino": "30/03/2027",
+      "num_turmas": 110,
+      "duracao_curso": 4,
+      "ondas": 3,
+      "percentual_prog": 70.0,
+      "turmas_min_por_mes": 1,
+      "mes_inicio_idx": 3,
+      "mes_termino_idx": 14
+    }
+  ],
+  "financeiro": {
+    "itens_custo": [
+      {
+        "tipo": "INSTRUTOR",
+        "descricao": "Remuneração",
+        "valor": 3200.0,
+        "projeto": null
+      }
+    ],
+    "moeda": "BRL"
+  }
+}
