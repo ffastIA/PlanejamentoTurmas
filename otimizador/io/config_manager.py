@@ -1,130 +1,119 @@
 import json
+import os
+import sys  # Adicionado para corrigir o erro de referência
 from pathlib import Path
 from datetime import datetime
-from typing import List, Tuple, Optional, Dict
-
-from ..data_models import ParametrosOtimizacao, ConfiguracaoProjeto, ParametrosFinanceiros, ItemCusto
-
-CONFIGS_DIR = Path("configuracoes_otimizacao")
+from typing import Tuple, List, Optional
+from ..data_models import ParametrosOtimizacao, Projeto, ParametrosFinanceiros, ItemCusto
 
 
-def inicializar_diretorio_configs():
-    CONFIGS_DIR.mkdir(exist_ok=True)
+def carregar_configuracao(caminho: str) -> Tuple[ParametrosOtimizacao, List[Projeto], Optional[ParametrosFinanceiros]]:
+    """Carrega os parâmetros e projetos do arquivo JSON."""
+    with open(caminho, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+
+    p_data = data['parametros']
+
+    # Mapeamento garantindo que o JSON sobrescreve os defaults do data_models
+    parametros = ParametrosOtimizacao(
+        capacidade_max_instrutor=p_data.get('capacidade_max_instrutor', 6),
+        spread_maximo=p_data.get('spread_maximo', 10),
+        meses_ferias=p_data.get('meses_ferias', []),
+        meses_ferias_idx=p_data.get('meses_ferias_idx', []),
+        timeout_segundos=p_data.get('timeout_segundos', 180),
+        peso_instrutores=p_data.get('peso_instrutores', 1000),
+        peso_spread=p_data.get('peso_spread', 10),
+        pico_maximo_turmas=p_data.get('pico_maximo_turmas', 300),
+        peso_penalidade_alvo=p_data.get('peso_penalidade_alvo', 100),
+        peso_monotonia_projeto=p_data.get('peso_monotonia_projeto', 50),
+        presenca_minima_projeto=p_data.get('presenca_minima_projeto', 2)
+    )
+
+    projetos = []
+    for p in data['projetos']:
+        projetos.append(Projeto(
+            nome=p['nome'],
+            data_inicio=p['data_inicio'],
+            data_termino=p['data_termino'],
+            num_turmas=p['num_turmas'],
+            duracao_curso=p['duracao_curso'],
+            ondas=p['ondas'],
+            percentual_prog=p.get('percentual_prog', 70.0),
+            turmas_min_por_mes=p.get('turmas_min_por_mes', 10),
+            mes_inicio_idx=p.get('mes_inicio_idx', 0),
+            mes_termino_idx=p.get('mes_termino_idx', 0),
+            habilidade=p.get('habilidade', "PROG")
+        ))
+
+    financeiro = None
+    if data.get('financeiro'):
+        itens = [ItemCusto(**i) for i in data['financeiro']['itens_custo']]
+        financeiro = ParametrosFinanceiros(
+            itens_custo=itens,
+            moeda=data['financeiro'].get('moeda', 'BRL')
+        )
+
+    return parametros, projetos, financeiro
 
 
-def salvar_configuracao(parametros: ParametrosOtimizacao, projetos: List[ConfiguracaoProjeto],
-                        financeiro: Optional[ParametrosFinanceiros] = None, nome_config: str = None) -> bool:
-    try:
-        inicializar_diretorio_configs()
-        if not nome_config:
-            sugestao = datetime.now().strftime("config_%Y%m%d_%H%M%S")
-            nome_config = (input(f"Nome [{sugestao}]: ").strip() or sugestao)
-            nome_config = "".join(c for c in nome_config if c.isalnum() or c in ('_', '-'))
+def salvar_configuracao(parametros: ParametrosOtimizacao, projetos: List[Projeto],
+                        financeiro: ParametrosFinanceiros = None):
+    """Salva a configuração atual em um novo arquivo JSON."""
+    config_dir = Path("configuracoes_otimizacao")
+    config_dir.mkdir(exist_ok=True)
 
-        config_data = {
-            "metadata": {"nome": nome_config, "data_criacao": datetime.now().isoformat(), "versao": "3.1"},
-            "parametros": parametros.__dict__,
-            "projetos": [p.__dict__ for p in projetos]
-        }
+    timestamp = datetime.now().strftime("%H%M%S")
+    nome_arquivo = f"config_V5_{timestamp}.json"
+    caminho = config_dir / nome_arquivo
 
-        # Serialização manual dos itens de custo para garantir formato correto
-        if financeiro:
-            fin_dict = financeiro.__dict__.copy()
-            fin_dict['itens_custo'] = [item.__dict__ for item in financeiro.itens_custo]
-            config_data["financeiro"] = fin_dict
+    data = {
+        "parametros": parametros._asdict(),
+        "projetos": [p._asdict() for p in projetos],
+        "financeiro": {
+            "itens_custo": [i._asdict() for i in financeiro.itens_custo],
+            "moeda": financeiro.moeda
+        } if financeiro else None
+    }
 
-        arquivo = CONFIGS_DIR / f"{nome_config}.json"
-        with open(arquivo, 'w', encoding='utf-8') as f:
-            json.dump(config_data, f, indent=2, ensure_ascii=False)
-        print(f"\n[✓] Salvo: {arquivo}")
-        return True
-    except Exception as e:
-        print(f"\n[ERRO] Salvar: {e}");
-        return False
+    with open(caminho, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    return str(caminho)
 
 
-def listar_configuracoes_salvas() -> List[Path]:
-    inicializar_diretorio_configs()
-    return sorted(CONFIGS_DIR.glob("*.json"), key=lambda x: x.stat().st_mtime, reverse=True)
+def menu_gerenciar_configuracoes() -> Tuple[
+    Optional[ParametrosOtimizacao], Optional[List[Projeto]], Optional[ParametrosFinanceiros]]:
+    """Exibe menu para seleção de arquivos de configuração existentes."""
+    config_dir = Path("configuracoes_otimizacao")
+    config_dir.mkdir(exist_ok=True)
 
+    # Ordena por data de modificação (mais recentes primeiro)
+    arquivos = sorted(list(config_dir.glob("*.json")), key=os.path.getmtime, reverse=True)
 
-def exibir_preview_configuracao(arquivo: Path):
-    try:
-        with open(arquivo, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        meta = data.get("metadata", {})
-        fin = data.get("financeiro", {})
-        itens = fin.get("itens_custo", [])
-        print(f"\n   Nome: {meta.get('nome')} | Criado: {meta.get('data_criacao')[:19]}")
-        print(f"   Projetos: {len(data.get('projetos', []))} | Custos Configurados: {len(itens)}")
-    except:
-        pass
-
-
-def carregar_configuracao(arquivo: Optional[Path] = None) -> Tuple[
-    Optional[ParametrosOtimizacao], Optional[List[ConfiguracaoProjeto]], Optional[ParametrosFinanceiros]]:
-    try:
-        if arquivo is None:
-            configs = listar_configuracoes_salvas()
-            if not configs: print("\n[!] Nenhuma config."); return None, None, None
-            print("\n--- CONFIGURAÇÕES SALVAS ---")
-            for i, c in enumerate(configs, 1): print(f"{i}. {c.stem}"); exibir_preview_configuracao(c)
-            escolha = input("\nEscolha [N] ou C cancelar: ").strip()
-            if escolha.upper() == 'C': return None, None, None
-            arquivo = configs[int(escolha) - 1]
-
-        with open(arquivo, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-
-        params = ParametrosOtimizacao(**data.get("parametros", {}))
-
-        projs = []
-        ignore = {'mes_inicio_idx', 'mes_termino_idx'}
-        for p in data.get("projetos", []):
-            projs.append(ConfiguracaoProjeto(**{k: v for k, v in p.items() if k not in ignore}))
-
-        fin_data = data.get("financeiro")
-        fin = None
-        if fin_data:
-            itens_raw = fin_data.pop('itens_custo', [])
-            fin = ParametrosFinanceiros(**fin_data)
-            # Reconstrói os objetos ItemCusto corretamente
-            fin.itens_custo = [ItemCusto(**item) for item in itens_raw]
-
-        print(f"\n[✓] Carregado: {arquivo.stem}")
-        return params, projs, fin
-    except Exception as e:
-        print(f"\n[ERRO] Carregar: {e}");
+    if not arquivos:
         return None, None, None
 
+    print("\n" + "=" * 40)
+    print("  SELECIONE UMA CONFIGURAÇÃO (JSON)")
+    print("=" * 40)
+    for i, arq in enumerate(arquivos):
+        print(f" [{i + 1}] {arq.name}")
 
-def deletar_configuracao():
-    print("Funcionalidade não implementada.")
+    print(" [N] Criar nova configuração manual")
+    print(" [C] Cancelar e sair")
 
+    escolha = input("\nOpção: ").strip().upper()
 
-def menu_gerenciar_configuracoes():
-    print("\n" + "=" * 80 + "\nGERENCIAMENTO DE CONFIGURAÇÕES\n" + "=" * 80)
-    configs = listar_configuracoes_salvas()
-    print(f"Configurações salvas: {len(configs)}\n")
+    if escolha == 'N':
+        return None, None, None
+    if escolha == 'C':
+        sys.exit(0)  # Agora a referência 'sys' está resolvida
 
-    # --- CORREÇÃO: As opções de print foram recolocadas aqui ---
-    print("Opções:")
-    print("  [1] Nova configuração (padrão ou customizada)")
-    if configs:
-        print("  [2] Carregar configuração salva")
-        print("  [3] Deletar configuração salva")
-    print("  [S] Sair")
-    # -----------------------------------------------------------
+    try:
+        idx = int(escolha) - 1
+        if 0 <= idx < len(arquivos):
+            return carregar_configuracao(str(arquivos[idx]))
+    except ValueError:
+        pass
 
-    while True:
-        opt = input("\nOpção: ").strip().upper()
-        if opt == 'S': raise KeyboardInterrupt()
-        if opt == '1': return None, None, None
-        if opt == '2' and configs:
-            res = carregar_configuracao()
-            if res[0]: return res
-        elif opt == '3' and configs:
-            deletar_configuracao()
-            return menu_gerenciar_configuracoes()
-        else:
-            print("[!] Opção inválida.")
+    print("⚠️ Opção inválida. Iniciando modo manual.")
+    return None, None, None
