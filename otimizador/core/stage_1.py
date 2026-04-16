@@ -1,14 +1,5 @@
-"""
-Stage 1: Otimização de Cronograma com Ondas Explícitas e
-         Soft Constraint de Monotonidade de Demanda.
-
-Versão 2.2 — Adição do objetivo de picos crescentes:
-  - Nova variável queda[m]: captura reduções na demanda mensal
-  - Objetivo estendido: alisamento + peso_monotonia × Σ queda[m]
-  - Soft constraint — não altera viabilidade, apenas orienta o solver
-  - Stage 2 (v5.3) permanece 100% inalterado
-  - Todos os contratos de entrada/saída preservados
-"""
+# otimizador/core/stage_1.py
+# Versão final com uniformidade suave da demanda (estratégia B), corrigindo erro do OR-Tools e mantendo compatibilidade total.
 
 from ortools.linear_solver import pywraplp
 from typing import List, Dict, Any
@@ -22,22 +13,18 @@ def otimizar_curva_demanda(
     parametros: ParametrosOtimizacao
 ) -> Dict[str, Any]:
     """
-    Estágio 1: Otimiza o cronograma de início das turmas.
+    Stage 1: Otimização de cronograma com ondas explícitas e
+    uniformidade suave da demanda ao longo do tempo.
 
-    MUDANÇAS v2.2 em relação à v2.1:
-    - Variáveis queda[m] adicionadas para capturar D[m] - D[m+1] > 0
-    - Objetivo: Σ D[m] + peso_monotonia × Σ queda[m]
-    - Se peso_monotonia = 0: comportamento idêntico à v2.1
-    - meses_ferias_idx: fonte única no topo (mantido da v2.1)
-    - Big-M = num_meses + 2 (mantido da v2.1)
-    - Contrato de saída preservado
+    Esta versão preserva os contratos originais do projeto e corrige:
+    - limite superior de x por projeto
+    - sequencialidade entre ondas do mesmo projeto pai
+    - mínimo por mês aplicado sobre turmas ativas no mês
+    - aceitação de solução OPTIMAL ou FEASIBLE
     """
 
     print("\n" + "=" * 80)
-    print(
-        "STAGE 1: OTIMIZAÇÃO DE CRONOGRAMA "
-        "(v2.2 — Picos Crescentes)"
-    )
+    print("STAGE 1: OTIMIZAÇÃO DE CRONOGRAMA (Uniformidade Suave)")
     print("=" * 80)
 
     solver = pywraplp.Solver.CreateSolver('SCIP')
@@ -48,67 +35,70 @@ def otimizar_curva_demanda(
     solver.SetTimeLimit(parametros.timeout_segundos * 1000)
     num_meses = len(meses)
 
-    # =========================================================================
-    # FONTE ÚNICA DE VERDADE — meses_ferias_idx
-    # Calculado UMA VEZ no topo — nunca recalculado em loops
-    # =========================================================================
     meses_ferias_idx = [
         meses.index(m)
         for m in parametros.meses_ferias
         if m in meses
     ]
 
-    print(f"\nParâmetros:")
-    print(f"  Período:       {meses[0]} a {meses[-1]} ({num_meses} meses)")
-    print(f"  Férias:        {[meses[i] for i in meses_ferias_idx]}")
-    print(f"  Pico máx:      {parametros.pico_maximo_turmas} turmas")
-    print(f"  Ondas:         {len(projetos)} entidades")
-    print(f"  Peso monotonia: {parametros.peso_monotonia}")
+    print("\nParâmetros:")
+    print(f"  Período:         {meses[0]} a {meses[-1]} ({num_meses} meses)")
+    print(f"  Férias:          {[meses[i] for i in meses_ferias_idx]}")
+    print(f"  Pico máx:        {parametros.pico_maximo_turmas} turmas")
+    print(f"  Ondas:           {len(projetos)} entidades")
+    print(f"  Peso monotonia:  {parametros.peso_monotonia}")
 
-    if parametros.peso_monotonia == 0:
-        print(
-            "  [INFO] peso_monotonia=0 → "
-            "comportamento idêntico à v2.1 (monotonia desativada)"
-        )
+    # Diagnóstico estrutural mínimo por projeto
+    for proj in projetos:
+        limite_superior = min(proj.mes_fim_projeto, num_meses - 1)
+        meses_obrigatorios = [
+            m for m in range(proj.inicio_min, limite_superior + 1)
+            if m not in meses_ferias_idx
+        ]
+        capacidade_total_de_atividade = (proj.prog + proj.rob) * proj.duracao
+        demanda_minima_exigida = len(meses_obrigatorios) * proj.min_turmas
 
-    # =========================================================================
-    # VARIÁVEIS: x[i, j] = turmas da onda i começando no mês j
-    # =========================================================================
+        if proj.min_turmas > 0 and capacidade_total_de_atividade < demanda_minima_exigida:
+            print(
+                f"\n[ERRO] Inviabilidade estrutural em {proj.nome}: "
+                f"capacidade={capacidade_total_de_atividade} < "
+                f"demanda mínima exigida={demanda_minima_exigida}"
+            )
+            return None
+
+    # Variáveis de decisão
+    # x[i, j] = quantidade de turmas do projeto i iniciando no mês j
+    # y[i, j] = 1 se o projeto i tem início no mês j
     x = {}
+    y = {}
     for i, proj in enumerate(projetos):
         total_onda = proj.prog + proj.rob
         for j in range(num_meses):
             x[i, j] = solver.IntVar(0, total_onda, f'x_{i}_{j}')
+            y[i, j] = solver.BoolVar(f'y_{i}_{j}')
 
-    # =========================================================================
-    # RESTRIÇÃO 1: Total de turmas por onda
-    # =========================================================================
+            if proj.inicio_min <= j <= proj.inicio_max:
+                solver.Add(x[i, j] <= total_onda * y[i, j])
+                solver.Add(x[i, j] >= y[i, j])
+            else:
+                solver.Add(x[i, j] == 0)
+                solver.Add(y[i, j] == 0)
+
+    # Restrição total por onda/projeto
     for i, proj in enumerate(projetos):
         total_onda = proj.prog + proj.rob
         solver.Add(
             solver.Sum([x[i, j] for j in range(num_meses)]) == total_onda
         )
 
-    # =========================================================================
-    # RESTRIÇÃO 2: Janela de início permitida
-    # =========================================================================
-    for i, proj in enumerate(projetos):
-        for j in range(num_meses):
-            if j < proj.inicio_min or j > proj.inicio_max:
-                solver.Add(x[i, j] == 0)
-
-    # =========================================================================
-    # RESTRIÇÃO 3: Sequencialidade intra-projeto
-    # Big-M = num_meses + 2 (estável numericamente)
-    # =========================================================================
+    # Agrupar por projeto pai
     projetos_por_pai: Dict[str, List[tuple]] = {}
     for i, proj in enumerate(projetos):
-        projetos_por_pai.setdefault(proj.projeto_pai, []).append(
-            (i, proj)
-        )
+        projetos_por_pai.setdefault(proj.projeto_pai, []).append((i, proj))
 
     BIG_M = num_meses + 2
 
+    # Sequencialidade entre ondas do mesmo projeto pai
     for pai, ondas_lista in projetos_por_pai.items():
         ondas_ord = sorted(ondas_lista, key=lambda t: t[1].onda_idx)
 
@@ -121,12 +111,10 @@ def otimizar_curva_demanda(
             i_ant, proj_ant = ondas_ord[k]
             i_pos, proj_pos = ondas_ord[k + 1]
 
-            for s_ant in range(
-                proj_ant.inicio_min,
-                proj_ant.inicio_max + 1
-            ):
+            for s_ant in range(proj_ant.inicio_min, proj_ant.inicio_max + 1):
                 ma_ant = calcular_meses_ativos(
-                    s_ant, proj_ant.duracao,
+                    s_ant,
+                    proj_ant.duracao,
                     meses_ferias_idx,
                     num_meses
                 )
@@ -135,332 +123,267 @@ def otimizar_curva_demanda(
 
                 primeiro_mes_pos = ma_ant[-1] + 1
 
-                for s_pos in range(
-                    proj_pos.inicio_min,
-                    min(primeiro_mes_pos, proj_pos.inicio_max + 1)
-                ):
-                    if s_pos > proj_pos.inicio_max:
-                        continue
+                for s_pos in range(proj_pos.inicio_min, proj_pos.inicio_max + 1):
+                    if s_pos < primeiro_mes_pos:
+                        solver.Add(y[i_ant, s_ant] + y[i_pos, s_pos] <= 1)
 
-                    total_ant = proj_ant.prog + proj_ant.rob
-                    total_pos = proj_pos.prog + proj_pos.rob
-
-                    if proj_ant.inicio_min == proj_ant.inicio_max:
-                        solver.Add(x[i_pos, s_pos] == 0)
-                    else:
-                        solver.Add(
-                            x[i_ant, s_ant] * total_pos
-                            + x[i_pos, s_pos] * total_ant
-                            <= total_ant * total_pos
-                        )
-
-    # =========================================================================
-    # RESTRIÇÃO 4: Demanda mensal e pico máximo
-    # =========================================================================
+    # Demanda mensal
     demanda_mensal_valores = [[] for _ in range(num_meses)]
 
     for i, proj in enumerate(projetos):
-        for start_month in range(num_meses):
+        for start_month in range(proj.inicio_min, proj.inicio_max + 1):
             ma = calcular_meses_ativos(
-                start_month, proj.duracao,
-                meses_ferias_idx, num_meses
+                start_month,
+                proj.duracao,
+                meses_ferias_idx,
+                num_meses
             )
             for m_ativo in ma:
-                demanda_mensal_valores[m_ativo].append(
-                    x[i, start_month]
-                )
+                demanda_mensal_valores[m_ativo].append(x[i, start_month])
+
+    demanda_expr_por_mes = []
+    for m in range(num_meses):
+        if demanda_mensal_valores[m]:
+            demanda_expr_por_mes.append(solver.Sum(demanda_mensal_valores[m]))
+        else:
+            demanda_expr_por_mes.append(0)
 
     print(f"\n  Pico máximo: {parametros.pico_maximo_turmas} turmas")
     for m in range(num_meses):
         if demanda_mensal_valores[m]:
-            solver.Add(
-                solver.Sum(demanda_mensal_valores[m])
-                <= parametros.pico_maximo_turmas
-            )
+            solver.Add(demanda_expr_por_mes[m] <= parametros.pico_maximo_turmas)
 
-    # =========================================================================
-    # RESTRIÇÃO 5: Mínimo de turmas por mês
-    # =========================================================================
+    # Restrição de mínimo por mês (sobre turmas ativas no mês)
     for i, proj in enumerate(projetos):
-        min_turmas = getattr(proj, 'min_turmas', 0)
-        if min_turmas <= 0:
+        if proj.min_turmas <= 0:
             continue
 
-        for m in range(proj.inicio_min, proj.mes_fim_projeto + 1):
-            if m >= num_meses:
-                break
+        for m in range(proj.inicio_min, min(proj.mes_fim_projeto, num_meses - 1) + 1):
             if m in meses_ferias_idx:
                 continue
 
             vars_ativas = []
-            for s in range(max(0, m - proj.duracao + 1), m + 1):
-                if proj.inicio_min <= s <= proj.inicio_max:
-                    if m in calcular_meses_ativos(
-                        s, proj.duracao, meses_ferias_idx, num_meses
-                    ):
-                        vars_ativas.append(x[i, s])
+            for s in range(proj.inicio_min, proj.inicio_max + 1):
+                ma = calcular_meses_ativos(s, proj.duracao, meses_ferias_idx, num_meses)
+                if m in ma:
+                    vars_ativas.append(x[i, s])
 
             if vars_ativas:
-                solver.Add(solver.Sum(vars_ativas) >= min_turmas)
+                solver.Add(solver.Sum(vars_ativas) >= proj.min_turmas)
+            else:
+                print(
+                    f"\n[ERRO] Inviabilidade estrutural em {proj.nome}: "
+                    f"não existe início válido que mantenha turma ativa em {meses[m]}.")
+                return None
 
-    # =========================================================================
-    # VARIÁVEIS DE QUEDA — NOVO v2.2
-    #
-    # queda[m] captura a redução de demanda entre mês m e mês m+1.
-    # Só criada para pares de meses letivos consecutivos
-    # (ignora transições para/de meses de férias).
-    #
-    # queda[m] >= D[m] - D[m+1]
-    # queda[m] >= 0              (IntVar com lb=0)
-    #
-    # Efeito: o solver paga `peso_monotonia` por cada turma de
-    # redução de demanda entre meses consecutivos, sendo incentivado
-    # a posicionar turmas de forma que a demanda seja crescente.
-    # =========================================================================
+    # Queda entre meses letivos adjacentes
     queda = {}
+    for m in range(num_meses - 1):
+        if m in meses_ferias_idx or (m + 1) in meses_ferias_idx:
+            continue
 
-    if parametros.peso_monotonia > 0:
-        print("\n  Configurando soft constraint de monotonidade...")
+        D_m = demanda_expr_por_mes[m] if demanda_mensal_valores[m] else 0
+        D_m1 = demanda_expr_por_mes[m + 1] if demanda_mensal_valores[m + 1] else 0
 
-        for m in range(num_meses - 1):
-            # Pular se m ou m+1 for mês de férias
-            if m in meses_ferias_idx or (m + 1) in meses_ferias_idx:
-                continue
+        queda[m] = solver.NumVar(0, parametros.pico_maximo_turmas, f'queda_{m}')
+        solver.Add(queda[m] >= D_m - D_m1)
 
-            # Só criar queda[m] se ambos os meses têm demanda potencial
-            tem_demanda_m  = bool(demanda_mensal_valores[m])
-            tem_demanda_m1 = bool(demanda_mensal_valores[m + 1])
-
-            if not tem_demanda_m or not tem_demanda_m1:
-                continue
-
-            D_m  = solver.Sum(demanda_mensal_valores[m])
-            D_m1 = solver.Sum(demanda_mensal_valores[m + 1])
-
-            queda[m] = solver.IntVar(
-                0,
-                parametros.pico_maximo_turmas,
-                f'queda_{m}'
-            )
-
-            # queda[m] >= D[m] - D[m+1]
-            # Se D[m] <= D[m+1] (crescimento): queda[m] = 0 (sem custo)
-            # Se D[m] >  D[m+1] (redução):     queda[m] > 0 (penalizado)
-            solver.Add(queda[m] >= D_m - D_m1)
-
-        print(
-            f"  Pares de meses monitorados: {len(queda)} "
-            f"(peso={parametros.peso_monotonia})"
-        )
-    else:
-        print("\n  Monotonidade desativada (peso_monotonia=0)")
-
-    # =========================================================================
-    # FUNÇÃO OBJETIVO — ESTENDIDA v2.2
-    #
-    # Termo 1 (herdado v2.1): Σ D[m] — minimiza demanda total (alisamento)
-    # Termo 2 (novo v2.2):    peso_monotonia × Σ queda[m]
-    #                         penaliza quedas de demanda entre meses
-    #
-    # O solver balanceia os dois termos:
-    #   - Alisamento tende a distribuir turmas uniformemente
-    #   - Monotonidade tende a concentrar picos no final
-    #   - O equilíbrio depende do peso relativo configurado
-    # =========================================================================
-    demanda_vars = [
-        solver.Sum(demanda_mensal_valores[m])
-        for m in range(num_meses)
-        if demanda_mensal_valores[m]
+    # Estratégia B: uniformidade suave da demanda
+    meses_monitorados = [
+        m for m in range(num_meses)
+        if m not in meses_ferias_idx and demanda_mensal_valores[m]
     ]
 
-    if demanda_vars:
-        objetivo = solver.Sum(demanda_vars)
+    total_demanda_ativa = sum(
+        (proj.prog + proj.rob) * proj.duracao for proj in projetos
+    )
+    alvo_demanda = (
+        total_demanda_ativa / len(meses_monitorados)
+        if meses_monitorados else 0
+    )
 
-        if queda:
-            objetivo = solver.Sum([
-                objetivo,
-                solver.Sum([
-                    parametros.peso_monotonia * queda[m]
-                    for m in queda
-                ])
-            ])
+    desvio_alvo = {}
+    for m in meses_monitorados:
+        D_m = demanda_expr_por_mes[m]
+        desvio_alvo[m] = solver.NumVar(0, parametros.pico_maximo_turmas, f'desvio_alvo_{m}')
+        solver.Add(desvio_alvo[m] >= D_m - alvo_demanda)
+        solver.Add(desvio_alvo[m] >= alvo_demanda - D_m)
 
-        solver.Minimize(objetivo)
+    variacao_suave = {}
+    for idx in range(len(meses_monitorados) - 1):
+        m_prev = meses_monitorados[idx]
+        m = meses_monitorados[idx + 1]
+        D_prev = demanda_expr_por_mes[m_prev]
+        D_m = demanda_expr_por_mes[m]
+        variacao_suave[(m_prev, m)] = solver.NumVar(
+            0,
+            parametros.pico_maximo_turmas,
+            f'variacao_suave_{m_prev}_{m}'
+        )
+        solver.Add(variacao_suave[(m_prev, m)] >= D_m - D_prev)
+        solver.Add(variacao_suave[(m_prev, m)] >= D_prev - D_m)
 
-    # =========================================================================
-    # RESOLUÇÃO
-    # =========================================================================
+    peso_uniformidade = max(
+        10,
+        parametros.peso_monotonia if parametros.peso_monotonia > 0 else 10
+    )
+    peso_variacao = max(5, peso_uniformidade // 2)
+
+    termos_objetivo = []
+    termos_objetivo.extend([
+        peso_uniformidade * desvio_alvo[m]
+        for m in desvio_alvo
+    ])
+    termos_objetivo.extend([
+        peso_variacao * variacao_suave[k]
+        for k in variacao_suave
+    ])
+    termos_objetivo.extend([
+        parametros.peso_monotonia * queda[m]
+        for m in queda
+    ])
+
+    if termos_objetivo:
+        solver.Minimize(solver.Sum(termos_objetivo))
+    else:
+        zero_obj = solver.NumVar(0, 0, 'zero_obj')
+        solver.Minimize(zero_obj)
+
     print("\nResolvendo...")
     status_solver = solver.Solve()
 
-    if status_solver in [
+    if status_solver not in [
         pywraplp.Solver.OPTIMAL,
         pywraplp.Solver.FEASIBLE
     ]:
-        status_str = (
-            "ÓTIMO" if status_solver == pywraplp.Solver.OPTIMAL
-            else "VIÁVEL"
-        )
-        print(f"✓ Solução encontrada! [{status_str}]")
-
-        # ── CONSTRUÇÃO DO CRONOGRAMA ──────────────────────────────────────────
-        cronograma = []
-        for i, proj in enumerate(projetos):
-            total_onda = proj.prog + proj.rob
-            for j in range(num_meses):
-                qtd_total = int(x[i, j].solution_value())
-                if qtd_total == 0:
-                    continue
-
-                if total_onda > 0:
-                    qtd_prog = round(qtd_total * proj.prog / total_onda)
-                    qtd_rob  = qtd_total - qtd_prog
-                else:
-                    qtd_prog = qtd_rob = 0
-
-                if qtd_prog > 0:
-                    cronograma.append({
-                        'projeto_idx':  i,
-                        'projeto_nome': proj.nome,
-                        'projeto_pai':  proj.projeto_pai,
-                        'onda_idx':     proj.onda_idx,
-                        'mes_inicio':   j,
-                        'qtd':          qtd_prog,
-                        'duracao':      proj.duracao,
-                        'habilidade':   'PROG'
-                    })
-                if qtd_rob > 0:
-                    cronograma.append({
-                        'projeto_idx':  i,
-                        'projeto_nome': proj.nome,
-                        'projeto_pai':  proj.projeto_pai,
-                        'onda_idx':     proj.onda_idx,
-                        'mes_inicio':   j,
-                        'qtd':          qtd_rob,
-                        'duracao':      proj.duracao,
-                        'habilidade':   'ROBOTICA'
-                    })
-
-        # Demanda final por mês
-        demanda_final = []
-        for m in range(num_meses):
-            val = sum(
-                int(v.solution_value())
-                for v in demanda_mensal_valores[m]
-            )
-            demanda_final.append(val)
-
-        pico_real = max(demanda_final) if demanda_final else 0
-
-        # ── LOG DE RESULTADOS ─────────────────────────────────────────────────
-        print(f"\n[✓] Resultados Stage 1:")
-        print(f"  Pico real:    {pico_real} turmas")
-        print(f"  Limite:       {parametros.pico_maximo_turmas} turmas")
-        print(f"  Itens:        {len(cronograma)}")
-        print(
-            f"  Total turmas: "
-            f"{sum(item['qtd'] for item in cronograma)}"
-        )
-
-        # Log da monotonidade atingida
-        if queda:
-            quedas_reais = {
-                m: int(queda[m].solution_value())
-                for m in queda
-                if queda[m].solution_value() > 0
-            }
-            total_queda = sum(quedas_reais.values())
-            print(f"\n  Análise de monotonidade:")
-            print(
-                f"  Quedas penalizadas: {len(quedas_reais)} mês(es) | "
-                f"Total de turmas em queda: {total_queda}"
-            )
-            if quedas_reais:
-                print("  Detalhamento de quedas:")
-                for m, q in quedas_reais.items():
-                    d_m  = demanda_final[m]
-                    d_m1 = demanda_final[m + 1]
-                    print(
-                        f"    {meses[m]} ({d_m}) → "
-                        f"{meses[m + 1]} ({d_m1}): "
-                        f"queda de {q} turmas"
-                    )
-            else:
-                print(
-                    "  ✓ Demanda completamente monotônica "
-                    "(nenhuma queda detectada)"
-                )
-
-        # Log de sequencialidade
-        print(f"\n  Verificação sequencialidade:")
-        for pai, ondas_lista in projetos_por_pai.items():
-            if len(ondas_lista) < 2:
-                continue
-            ondas_ord = sorted(
-                ondas_lista, key=lambda t: t[1].onda_idx
-            )
-            for k in range(len(ondas_ord) - 1):
-                i_ant, _ = ondas_ord[k]
-                i_pos, _ = ondas_ord[k + 1]
-                s_ant_list = [
-                    j for j in range(num_meses)
-                    if int(x[i_ant, j].solution_value()) > 0
-                ]
-                s_pos_list = [
-                    j for j in range(num_meses)
-                    if int(x[i_pos, j].solution_value()) > 0
-                ]
-                if s_ant_list and s_pos_list:
-                    s_a = min(s_ant_list)
-                    s_p = min(s_pos_list)
-                    ok  = "✓" if s_p > s_a else "⚠"
-                    print(
-                        f"  {ok} {pai}: "
-                        f"Onda{k+1}={meses[s_a]}, "
-                        f"Onda{k+2}={meses[s_p]}"
-                    )
-
-        # Log de demanda mensal com indicador de tendência
-        print(f"\n  Demanda mensal:")
-        for m, dem in enumerate(demanda_final):
-            if dem == 0:
-                continue
-            ok = (
-                "✓" if dem <= parametros.pico_maximo_turmas else "✗"
-            )
-            # Indicador de tendência em relação ao mês anterior letivo
-            tendencia = ""
-            if m > 0 and demanda_final[m - 1] > 0:
-                if m not in meses_ferias_idx \
-                        and (m - 1) not in meses_ferias_idx:
-                    diff = dem - demanda_final[m - 1]
-                    if diff > 0:
-                        tendencia = f" ↑(+{diff})"
-                    elif diff < 0:
-                        tendencia = f" ↓({diff})"
-                    else:
-                        tendencia = " →(=)"
-            print(
-                f"    {ok} {meses[m]}: {dem} turmas{tendencia}"
-            )
-
-        return {
-            'status':         'otimo',
-            'cronograma':     cronograma,
-            'pico_max':       pico_real,
-            'demanda_mensal': demanda_final,
-            'meses_ferias':   meses_ferias_idx
-        }
-
-    else:
         print("\n[ERRO] Solver não encontrou solução viável.")
         print("Possíveis causas:")
-        print(
-            "  1. Ondas com janela inválida "
-            "(verifique output da conversão)"
-        )
+        print("  1. Ondas com janela inválida")
         print("  2. Pico máximo muito baixo para o volume de turmas")
-        print(
-            "  3. Período insuficiente para acomodar todas as ondas"
-        )
+        print("  3. Período insuficiente para acomodar todas as ondas")
+        print("  4. Mínimo por mês acima da capacidade estrutural da onda")
         return None
+
+    status_str = (
+        'ÓTIMO'
+        if status_solver == pywraplp.Solver.OPTIMAL
+        else 'VIÁVEL'
+    )
+    print(f"✓ Solução encontrada! [{status_str}]")
+
+    cronograma = []
+    for i, proj in enumerate(projetos):
+        total_onda = proj.prog + proj.rob
+        for j in range(num_meses):
+            qtd_total = int(round(x[i, j].solution_value()))
+            if qtd_total <= 0:
+                continue
+
+            if total_onda > 0:
+                qtd_prog = round(qtd_total * proj.prog / total_onda)
+                qtd_rob = qtd_total - qtd_prog
+            else:
+                qtd_prog = 0
+                qtd_rob = 0
+
+            if qtd_prog > 0:
+                cronograma.append({
+                    'projeto_idx': i,
+                    'projeto_nome': proj.nome,
+                    'projeto_pai': proj.projeto_pai,
+                    'onda_idx': proj.onda_idx,
+                    'mes_inicio': j,
+                    'qtd': qtd_prog,
+                    'duracao': proj.duracao,
+                    'habilidade': 'PROG'
+                })
+
+            if qtd_rob > 0:
+                cronograma.append({
+                    'projeto_idx': i,
+                    'projeto_nome': proj.nome,
+                    'projeto_pai': proj.projeto_pai,
+                    'onda_idx': proj.onda_idx,
+                    'mes_inicio': j,
+                    'qtd': qtd_rob,
+                    'duracao': proj.duracao,
+                    'habilidade': 'ROBOTICA'
+                })
+
+    demanda_final = []
+    for m in range(num_meses):
+        val = sum(int(round(v.solution_value())) for v in demanda_mensal_valores[m])
+        demanda_final.append(val)
+
+    pico_real = max(demanda_final) if demanda_final else 0
+
+    if meses_monitorados:
+        desvio_total = sum(desvio_alvo[m].solution_value() for m in desvio_alvo)
+        variacao_total = sum(variacao_suave[k].solution_value() for k in variacao_suave)
+        print(f"  Alvo demanda: {alvo_demanda:.2f}")
+        print(f"  Desvio total: {desvio_total:.2f}")
+        print(f"  Variação total: {variacao_total:.2f}")
+
+    print(f"\n[✓] Resultados Stage 1:")
+    print(f"  Pico real:    {pico_real} turmas")
+    print(f"  Limite:       {parametros.pico_maximo_turmas} turmas")
+    print(f"  Itens:        {len(cronograma)}")
+    print(f"  Total turmas: {sum(item['qtd'] for item in cronograma)}")
+
+    print("\n  Análise de monotonidade:")
+    total_queda = sum(queda[m].solution_value() for m in queda)
+    print(f"  Total de queda penalizada: {total_queda:.2f}")
+    for m in sorted(queda.keys()):
+        if queda[m].solution_value() > 0:
+            print(
+                f"    {meses[m]} ({demanda_final[m]}) -> "
+                f"{meses[m + 1]} ({demanda_final[m + 1]}): "
+                f"queda {queda[m].solution_value():.2f}"
+            )
+
+    print("\n  Verificação sequencialidade:")
+    for pai, ondas_lista in projetos_por_pai.items():
+        if len(ondas_lista) < 2:
+            continue
+        ondas_ord = sorted(ondas_lista, key=lambda t: t[1].onda_idx)
+        for k in range(len(ondas_ord) - 1):
+            i_ant, _ = ondas_ord[k]
+            i_pos, _ = ondas_ord[k + 1]
+            s_ant_list = [
+                item['mes_inicio'] for item in cronograma
+                if item['projeto_idx'] == i_ant
+            ]
+            s_pos_list = [
+                item['mes_inicio'] for item in cronograma
+                if item['projeto_idx'] == i_pos
+            ]
+            if s_ant_list and s_pos_list:
+                s_a = min(s_ant_list)
+                s_p = min(s_pos_list)
+                ok = '✓' if s_p > s_a else '⚠'
+                print(f"  {ok} {pai}: Onda{k+1}={meses[s_a]}, Onda{k+2}={meses[s_p]}")
+
+    print("\n  Demanda mensal:")
+    for m, dem in enumerate(demanda_final):
+        if dem == 0:
+            continue
+        ok = '✓' if dem <= parametros.pico_maximo_turmas else '✗'
+        tendencia = ''
+        if m > 0 and demanda_final[m - 1] > 0:
+            if m not in meses_ferias_idx and (m - 1) not in meses_ferias_idx:
+                diff = dem - demanda_final[m - 1]
+                if diff > 0:
+                    tendencia = f' ↑(+{diff})'
+                elif diff < 0:
+                    tendencia = f' ↓({diff})'
+                else:
+                    tendencia = ' →(=)'
+        print(f"    {ok} {meses[m]}: {dem} turmas{tendencia}")
+
+    return {
+        'status': 'otimo',
+        'cronograma': cronograma,
+        'pico_max': pico_real,
+        'demanda_mensal': demanda_final,
+        'meses_ferias': meses_ferias_idx
+    }
