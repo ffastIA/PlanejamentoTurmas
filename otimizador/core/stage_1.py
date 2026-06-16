@@ -197,19 +197,45 @@ def otimizar_curva_demanda(
     total_demanda_ativa = sum(
         (proj.prog + proj.rob) * proj.duracao for proj in projetos
     )
-    alvo_demanda = (
-        total_demanda_ativa / len(meses_monitorados)
-        if meses_monitorados else 0
-    )
+
+    # Alvo variável por mês: proporcional à capacidade factível de cada mês.
+    # Projetos com janela de início que não cobre um dado mês contribuem zero
+    # para a capacidade daquele mês, evitando metas inalcançáveis nas bordas.
+    capacidade_factivel = {
+        m: sum(
+            (proj.prog + proj.rob)
+            for proj in projetos
+            if proj.inicio_min <= m <= proj.mes_fim_projeto
+        )
+        for m in meses_monitorados
+    }
+    total_factivel = sum(capacidade_factivel.values())
+    if total_factivel > 0:
+        fator = total_demanda_ativa / total_factivel
+        alvo_por_mes = {m: capacidade_factivel[m] * fator for m in meses_monitorados}
+    else:
+        alvo_por_mes = {m: 0.0 for m in meses_monitorados}
 
     desvio_alvo = {}
     for m in meses_monitorados:
         D_m = demanda_expr_por_mes[m]
+        alvo_m = alvo_por_mes[m]
         desvio_alvo[m] = solver.NumVar(0, parametros.pico_maximo_turmas, f'desvio_alvo_{m}')
-        solver.Add(desvio_alvo[m] >= D_m - alvo_demanda)
-        solver.Add(desvio_alvo[m] >= alvo_demanda - D_m)
+        solver.Add(desvio_alvo[m] >= D_m - alvo_m)
+        solver.Add(desvio_alvo[m] >= alvo_m - D_m)
 
+    # Pares de meses monitorados consecutivos; meses que cruzam férias recebem
+    # peso reduzido (20%) pois a variação nessa fronteira é inevitável.
+    FATOR_REDUCAO_FERIAS = 0.2
     variacao_suave = {}
+    pesos_variacao_suave = {}
+
+    peso_uniformidade = max(
+        10,
+        parametros.peso_monotonia if parametros.peso_monotonia > 0 else 10
+    )
+    peso_variacao = max(5, peso_uniformidade // 2)
+
     for idx in range(len(meses_monitorados) - 1):
         m_prev = meses_monitorados[idx]
         m = meses_monitorados[idx + 1]
@@ -222,12 +248,11 @@ def otimizar_curva_demanda(
         )
         solver.Add(variacao_suave[(m_prev, m)] >= D_m - D_prev)
         solver.Add(variacao_suave[(m_prev, m)] >= D_prev - D_m)
-
-    peso_uniformidade = max(
-        10,
-        parametros.peso_monotonia if parametros.peso_monotonia > 0 else 10
-    )
-    peso_variacao = max(5, peso_uniformidade // 2)
+        # Detectar se há meses de férias entre m_prev e m (salto > 1 mês)
+        cruza_ferias = (m - m_prev) > 1
+        pesos_variacao_suave[(m_prev, m)] = (
+            peso_variacao * FATOR_REDUCAO_FERIAS if cruza_ferias else peso_variacao
+        )
 
     termos_objetivo = []
     termos_objetivo.extend([
@@ -235,7 +260,7 @@ def otimizar_curva_demanda(
         for m in desvio_alvo
     ])
     termos_objetivo.extend([
-        peso_variacao * variacao_suave[k]
+        pesos_variacao_suave[k] * variacao_suave[k]
         for k in variacao_suave
     ])
     termos_objetivo.extend([
@@ -320,7 +345,8 @@ def otimizar_curva_demanda(
     if meses_monitorados:
         desvio_total = sum(desvio_alvo[m].solution_value() for m in desvio_alvo)
         variacao_total = sum(variacao_suave[k].solution_value() for k in variacao_suave)
-        print(f"  Alvo demanda: {alvo_demanda:.2f}")
+        alvo_medio = sum(alvo_por_mes.values()) / len(alvo_por_mes)
+        print(f"  Alvo demanda (médio): {alvo_medio:.2f}")
         print(f"  Desvio total: {desvio_total:.2f}")
         print(f"  Variação total: {variacao_total:.2f}")
 

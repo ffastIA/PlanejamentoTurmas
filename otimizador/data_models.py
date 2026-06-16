@@ -114,6 +114,14 @@ class ParametrosOtimizacao:
     #   500      → preferência moderada (padrão)
     #   >10000   → monotonia dominante sobre alisamento (não recomendado)
     peso_monotonia: int             = 500
+
+    # peso_spread_mensal: penaliza a diferença entre o mês mais carregado e
+    # o menos carregado de cada instrutor ativo (spread intra-período).
+    # Calibração sugerida:
+    #   0        → distribuição intra-período desativada
+    #   50–200   → preferência moderada por carga uniforme (padrão: 100)
+    #   >1000    → uniformidade intra-período dominante
+    peso_spread_mensal: int         = 100
     # ─────────────────────────────────────────────────────────────────────────
 
     def __post_init__(self):
@@ -150,6 +158,11 @@ class ParametrosOtimizacao:
                 not (0 <= self.peso_monotonia <= 100000):
             raise ValueError(
                 "Peso monotonia deve estar entre 0 e 100000."
+            )
+        if not isinstance(self.peso_spread_mensal, int) or \
+                not (0 <= self.peso_spread_mensal <= 100000):
+            raise ValueError(
+                "Peso spread mensal deve estar entre 0 e 100000."
             )
 
 

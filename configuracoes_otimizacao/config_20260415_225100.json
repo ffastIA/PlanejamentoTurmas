@@ -1,0 +1,50 @@
+{
+  "metadata": {
+    "nome": "config_20260415_225100",
+    "data_criacao": "2026-04-15T22:51:00.0000",
+    "versao": "3.1"
+  },
+  "parametros": {
+    "capacidade_max_instrutor": 6,
+    "spread_maximo": 4,
+    "meses_ferias": [
+      "Jul/26",
+      "Dez/26"
+    ],
+    "timeout_segundos": 180,
+    "peso_instrutores": 5000,
+    "peso_spread": 1,
+    "pico_maximo_turmas": 500,
+    "peso_monotonia": 500
+  },
+  "projetos": [
+    {
+      "nome": "DD",
+      "data_inicio": "01/05/2026",
+      "data_termino": "30/04/2027",
+      "num_turmas": 130,
+      "duracao_curso": 3,
+      "ondas": 1,
+      "percentual_prog": 70.0,
+      "turmas_min_por_mes": 10,
+      "mes_inicio_idx": 4,
+      "mes_termino_idx": 15
+    },
+        {
+      "nome": "OF",
+      "data_inicio": "01/05/2026",
+      "data_termino": "30/04/2027",
+      "num_turmas": 15,
+      "duracao_curso": 1,
+      "ondas": 1,
+      "percentual_prog": 80.0,
+      "turmas_min_por_mes": 1,
+      "mes_inicio_idx": 4,
+      "mes_termino_idx": 15
+    }
+  ],
+  "financeiro": {
+    "itens_custo": [],
+    "moeda": "BRL"
+  }
+}

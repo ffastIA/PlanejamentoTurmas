@@ -1,8 +1,8 @@
 """
 Sistema de Otimização de Alocação de Instrutores
-Versão 3.8 (Com Logging Completo e Gráficos Melhorados)
-Autor: Sistema Idear
-Data: Fevereiro 2026
+Versão 3.9 (Com Logging Completo e Gráficos Melhorados)
+Autor: Claude Code
+Data: junho 2026
 """
 
 import sys

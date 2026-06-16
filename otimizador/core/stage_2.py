@@ -60,6 +60,9 @@ def otimizar_atribuicao_e_carga(
     turmas_prog = [t for t in turmas_objetos if t.habilidade == 'PROG']
     turmas_rob = [t for t in turmas_objetos if t.habilidade == 'ROBOTICA']
 
+    if not turmas_objetos:
+        return {"status": "falha", "erro": "Nenhuma turma para alocar"}
+
     print(f"Turmas criadas: PROG={len(turmas_prog)}, ROB={len(turmas_rob)}")
 
     # Dimensionamento dos pools
@@ -109,6 +112,9 @@ def _dimensionar_pool(
     """
     Dimensiona o pool de instrutores necessário para cobrir a demanda mensal.
     """
+    if not turmas:
+        return 0
+
     demanda_por_mes = defaultdict(int)
     for turma in turmas:
         meses_ativos = calcular_meses_ativos(turma.mes_inicio, turma.duracao, meses_ferias_idx, num_meses)
@@ -117,7 +123,8 @@ def _dimensionar_pool(
 
     pico = max(demanda_por_mes.values()) if demanda_por_mes else 0
     minimo = math.ceil(pico / capacidade)
-    pool = minimo + max(2, math.ceil(minimo * 0.30))
+    # Margem de 15% (era 30%) para pressionar o solver a distribuir melhor
+    pool = minimo + max(1, math.ceil(minimo * 0.15))
 
     print(f"Pool {habilidade}: pico={pico}, mínimo={minimo}, pool={pool}")
     return pool
@@ -225,8 +232,22 @@ def _resolver_subproblema(
         solver.Add(min_carga <= carga_total + (1 - ativo[i]) * num_turmas)
     solver.Add(spread_v == max_carga - min_carga)
 
-    # Estratégia B: Suavização temporal da equipe
+    # Spread mensal por instrutor: penaliza diferença entre mês mais e menos carregado
+    max_mes_inst = {}
+    min_mes_inst = {}
+    spread_mes_inst = {}
     meses_com_turma = [m for m in meses_letivos if turmas_no_mes.get(m, [])]
+    for i in range(num_instrutores):
+        max_mes_inst[i] = solver.IntVar(0, parametros.capacidade_max_instrutor, f'max_mes_{i}')
+        min_mes_inst[i] = solver.IntVar(0, parametros.capacidade_max_instrutor, f'min_mes_{i}')
+        spread_mes_inst[i] = solver.IntVar(0, parametros.capacidade_max_instrutor, f'spread_mes_{i}')
+        for m in meses_com_turma:
+            carga_m = solver.Sum([x[i, t] for t in turmas_no_mes.get(m, [])])
+            solver.Add(max_mes_inst[i] >= carga_m)
+            solver.Add(min_mes_inst[i] <= carga_m + (1 - ativo[i]) * parametros.capacidade_max_instrutor)
+        solver.Add(spread_mes_inst[i] == max_mes_inst[i] - min_mes_inst[i])
+
+    # Estratégia B: Suavização temporal da equipe
     inst_ativos_mes = {}
     for m in meses_com_turma:
         inst_ativos_mes[m] = solver.Sum([y[i, m] for i in range(num_instrutores)])
@@ -242,11 +263,13 @@ def _resolver_subproblema(
     variacao_total_equipe = solver.Sum(list(variacao_inst_mes.values()))
 
     # Objetivo
+    # Nota: Σy[i,m] foi removido — penalizava instrutores ativos em muitos meses,
+    # incentivando concentração de carga no tempo (oposto à uniformidade desejada).
     peso_suavizacao_temporal = max(1, parametros.peso_instrutores)
     termos_objetivo = [
         parametros.peso_spread * spread_v,
         parametros.peso_instrutores * solver.Sum(ativo),
-        parametros.peso_instrutores * solver.Sum(list(y.values())),
+        parametros.peso_spread_mensal * solver.Sum([spread_mes_inst[i] for i in range(num_instrutores)]),
         peso_suavizacao_temporal * variacao_total_equipe
     ]
     solver.Minimize(solver.Sum(termos_objetivo))
