@@ -67,13 +67,24 @@ def main():
         print("ETAPA 1: CONFIGURAÇÃO")
         print("=" * 80)
 
-        parametros, projetos_config, parametros_financeiros = config_manager.menu_gerenciar_configuracoes()
+        parametros, projetos_config, parametros_financeiros, arquivo_config = \
+            config_manager.menu_gerenciar_configuracoes()
 
         if not (parametros and projetos_config):
             print("\n[INFO] Criando nova configuração...")
             parametros = user_input.obter_parametros_usuario()
             projetos_config = user_input.obter_projetos_usuario()
             parametros_financeiros = None
+
+            # Salvar imediatamente, antes de qualquer validação ou otimização.
+            # Garante que os parâmetros não se percam em caso de erro de inviabilidade.
+            print("\n" + "-" * 80)
+            print("[INFO] Salvando configuração antes de executar...")
+            nome_auto = datetime.now().strftime("config_%Y%m%d_%H%M%S")
+            if config_manager.salvar_configuracao(parametros, projetos_config, None, nome_auto):
+                arquivo_config = config_manager.CONFIGS_DIR / f"{nome_auto}.json"
+                print(f"[INFO] Em caso de erro, edite '{arquivo_config}' e recarregue.")
+            print("-" * 80)
         else:
             print("\n[INFO] Configurações carregadas com sucesso")
             user_input.exibir_resumo_parametros(parametros)
@@ -215,9 +226,17 @@ def main():
 
             parametros_financeiros = user_input.obter_parametros_financeiros(projetos_config)
 
-            if input("\nSalvar configuração completa? (S/N) [S]: ").strip().upper() in ('', 'S'):
-                config_manager.salvar_configuracao(parametros, projetos_config, parametros_financeiros)
-                print("[✓] Configuração salva com sucesso")
+            # Atualiza o arquivo já salvo com os dados financeiros, sem perguntar nome novamente.
+            if arquivo_config and arquivo_config.exists():
+                nome_existente = arquivo_config.stem
+                config_manager.salvar_configuracao(
+                    parametros, projetos_config, parametros_financeiros, nome_existente
+                )
+                print("[✓] Configuração atualizada com dados financeiros")
+            else:
+                if input("\nSalvar configuração completa? (S/N) [S]: ").strip().upper() in ('', 'S'):
+                    config_manager.salvar_configuracao(parametros, projetos_config, parametros_financeiros)
+                    print("[✓] Configuração salva com sucesso")
 
         # ========================================================================
         # ETAPA 7: GERAÇÃO DE RELATÓRIOS

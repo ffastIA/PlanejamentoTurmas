@@ -5,7 +5,8 @@ from typing import List, Tuple, Optional, Dict
 
 from ..data_models import ParametrosOtimizacao, ConfiguracaoProjeto, ParametrosFinanceiros, ItemCusto
 
-CONFIGS_DIR = Path("configuracoes_otimizacao")
+# Raiz do projeto = dois níveis acima de otimizador/io/config_manager.py
+CONFIGS_DIR = Path(__file__).resolve().parents[2] / "configuracoes_otimizacao"
 
 
 def inicializar_diretorio_configs():
@@ -62,15 +63,15 @@ def exibir_preview_configuracao(arquivo: Path):
 
 
 def carregar_configuracao(arquivo: Optional[Path] = None) -> Tuple[
-    Optional[ParametrosOtimizacao], Optional[List[ConfiguracaoProjeto]], Optional[ParametrosFinanceiros]]:
+    Optional[ParametrosOtimizacao], Optional[List[ConfiguracaoProjeto]], Optional[ParametrosFinanceiros], Optional[Path]]:
     try:
         if arquivo is None:
             configs = listar_configuracoes_salvas()
-            if not configs: print("\n[!] Nenhuma config."); return None, None, None
+            if not configs: print("\n[!] Nenhuma config."); return None, None, None, None
             print("\n--- CONFIGURAÇÕES SALVAS ---")
             for i, c in enumerate(configs, 1): print(f"{i}. {c.stem}"); exibir_preview_configuracao(c)
             escolha = input("\nEscolha [N] ou C cancelar: ").strip()
-            if escolha.upper() == 'C': return None, None, None
+            if escolha.upper() == 'C': return None, None, None, None
             arquivo = configs[int(escolha) - 1]
 
         with open(arquivo, 'r', encoding='utf-8') as f:
@@ -88,14 +89,13 @@ def carregar_configuracao(arquivo: Optional[Path] = None) -> Tuple[
         if fin_data:
             itens_raw = fin_data.pop('itens_custo', [])
             fin = ParametrosFinanceiros(**fin_data)
-            # Reconstrói os objetos ItemCusto corretamente
             fin.itens_custo = [ItemCusto(**item) for item in itens_raw]
 
         print(f"\n[✓] Carregado: {arquivo.stem}")
-        return params, projs, fin
+        return params, projs, fin, arquivo
     except Exception as e:
         print(f"\n[ERRO] Carregar: {e}");
-        return None, None, None
+        return None, None, None, None
 
 
 def deletar_configuracao():
@@ -103,23 +103,23 @@ def deletar_configuracao():
 
 
 def menu_gerenciar_configuracoes():
+    """Retorna (parametros, projetos, financeiro, arquivo_config).
+    arquivo_config é None quando o usuário opta por nova configuração."""
     print("\n" + "=" * 80 + "\nGERENCIAMENTO DE CONFIGURAÇÕES\n" + "=" * 80)
     configs = listar_configuracoes_salvas()
     print(f"Configurações salvas: {len(configs)}\n")
 
-    # --- CORREÇÃO: As opções de print foram recolocadas aqui ---
     print("Opções:")
     print("  [1] Nova configuração (padrão ou customizada)")
     if configs:
         print("  [2] Carregar configuração salva")
         print("  [3] Deletar configuração salva")
     print("  [S] Sair")
-    # -----------------------------------------------------------
 
     while True:
         opt = input("\nOpção: ").strip().upper()
         if opt == 'S': raise KeyboardInterrupt()
-        if opt == '1': return None, None, None
+        if opt == '1': return None, None, None, None
         if opt == '2' and configs:
             res = carregar_configuracao()
             if res[0]: return res
