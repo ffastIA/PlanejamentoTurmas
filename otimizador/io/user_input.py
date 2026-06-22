@@ -27,6 +27,14 @@ def obter_parametros_usuario() -> ParametrosOtimizacao:
         peso_spread = _obter_int_usuario("Peso spread de carga [padrão: 1]: ", 1, 0, 10000, "Peso Spread")
         pico_maximo = _obter_int_usuario("Pico máximo de turmas simultâneas [padrão: 100]: ", 100, 1, 500,
                                          "Pico Máximo")
+        peso_monotonia = _obter_int_usuario(
+            "Peso monotonia da demanda — penaliza quedas no Stage 1 [padrão: 500]: ",
+            500, 0, 100000, "Peso Monotonia"
+        )
+        peso_spread_mensal = _obter_int_usuario(
+            "Peso spread mensal por instrutor — uniformidade intra-período Stage 2 [padrão: 100]: ",
+            100, 0, 100000, "Peso Spread Mensal"
+        )
 
         parametros = ParametrosOtimizacao(
             capacidade_max_instrutor=capacidade_max,
@@ -34,7 +42,9 @@ def obter_parametros_usuario() -> ParametrosOtimizacao:
             timeout_segundos=timeout,
             peso_instrutores=peso_instrutores,
             peso_spread=peso_spread,
-            pico_maximo_turmas=pico_maximo
+            pico_maximo_turmas=pico_maximo,
+            peso_monotonia=peso_monotonia,
+            peso_spread_mensal=peso_spread_mensal,
         )
         exibir_resumo_parametros(parametros)
         return parametros
@@ -314,9 +324,8 @@ def _obter_float_usuario(prompt: str, valor_padrao: Optional[float], minimo: flo
 
 def exibir_resumo_parametros(params: ParametrosOtimizacao):
     print("\n" + "=" * 80 + "\nPARÂMETROS GLOBAIS\n" + "=" * 80)
-    print(
-        f"  • Capacidade: {params.capacidade_max_instrutor} | Spread: {params.spread_maximo} | Timeout: {params.timeout_segundos}s")
-    print(f"  • Pesos: Instrutores={params.peso_instrutores}, Spread={params.peso_spread}")
+    print(f"  • Capacidade: {params.capacidade_max_instrutor} | Spread: {params.spread_maximo} | Timeout: {params.timeout_segundos}s")
+    print(f"  • Pesos: Instrutores={params.peso_instrutores}, Spread={params.peso_spread}, Monotonia={params.peso_monotonia}, Spread Mensal={params.peso_spread_mensal}")
 
 
 def exibir_resumo_projetos(projetos: List[ConfiguracaoProjeto]):

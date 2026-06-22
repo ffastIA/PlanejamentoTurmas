@@ -1,9 +1,25 @@
 """
 Sistema de Otimização de Alocação de Instrutores
-Versão 3.9 (Com Logging Completo e Gráficos Melhorados)
-Autor: Claude Code
-Data: junho 2026
+=================================================
+Versão : 4.0.0
+Data   : 2026-06-22
+Autor  : Engine Tecnologia
+
+Histórico de versões
+--------------------
+4.0.0  2026-06-22  Migração do solver para CP-SAT (OR-Tools); otimização em
+                   duas fases no Stage 2; quebra de simetria de instrutores;
+                   AddImplication/AddAbsEquality no lugar de linearizações
+                   manuais; busca paralela (4 workers); peso_monotonia e
+                   peso_spread_mensal expostos no menu de parâmetros.
+3.9.0  2026-06    Logging completo e gráficos melhorados.
+3.8.0  2026-06    Suavização temporal da equipe (Stage 2 v5.4).
+3.7.0  2026-05    Redução de picos de turmas nas previsões.
+3.6.0  2026-05    Solver remodelado para reduzir ociosidade da equipe.
+3.5.0  2026-04    Branch Ondas — versão estável com alocação de instrutores.
 """
+
+__version__ = "4.0.0"
 
 import sys
 import os
@@ -39,7 +55,7 @@ def main():
 
     print("=" * 80)
     print("SISTEMA DE OTIMIZAÇÃO DE ALOCAÇÃO DE INSTRUTORES")
-    print("Versão 3.8 (Com Logging Completo e Gráficos Melhorados)")
+    print(f"Versão {__version__}  |  Engine Tecnologia")
     print("=" * 80)
     print(f"\n📋 Arquivo de log: {log_file}\n")
 
