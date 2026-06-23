@@ -246,7 +246,9 @@ def gerar_relatorio_pdf(
         f"{instrutores_prog_pico} PROG + {instrutores_rob_pico} ROB)\n"
         f"- Spread de Carga (Equilibrio): "
         f"{resultados_estagio2['spread_carga']} "
-        f"(Max permitido: {resultados_estagio2['spread_max_permitido']})"
+        f"(Max permitido: {resultados_estagio2['spread_max_permitido']})\n"
+        f"- Capacidade de turmas por instrutor: "
+        f"{capacidade_max} turmas/instrutor"
     )
     pdf.chapter_body(texto_resumo)
 
