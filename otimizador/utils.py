@@ -86,6 +86,23 @@ def calcular_meses_ativos(
     return meses_ativos
 
 
+def calcular_meses_bloqueados(
+    permite_ferias_escolares: bool,
+    meses_recesso_idx: list,
+    meses_ferias_escolares_idx: list
+) -> list:
+    """
+    Resolve o calendário de bloqueio efetivo de um projeto/turma.
+
+    Recesso institucional bloqueia sempre (instrutor indisponível).
+    Férias escolares só bloqueiam quem depende da escola estar aberta —
+    projetos com a tag (oficinas, espaços tecnológicos) seguem ativos.
+    """
+    if permite_ferias_escolares:
+        return meses_recesso_idx
+    return sorted(set(meses_recesso_idx) | set(meses_ferias_escolares_idx))
+
+
 def calcular_janela_inicio(
     mes_inicio_projeto: int,
     mes_fim_projeto: int,
@@ -263,7 +280,8 @@ def _avancar_inicio_min_pos_onda(
 def converter_projetos_para_modelo(
     projetos_config: List[ConfiguracaoProjeto],
     meses: List[str],
-    meses_ferias: List[int],
+    meses_recesso: List[int],
+    meses_ferias_escolares: List[int],
     parametros: ParametrosOtimizacao
 ) -> List[Projeto]:
     """
@@ -296,11 +314,15 @@ def converter_projetos_para_modelo(
             config.data_termino, meses
         )
 
+        bloqueados = calcular_meses_bloqueados(
+            config.permite_ferias_escolares, meses_recesso, meses_ferias_escolares
+        )
+
         inicio_min_global, inicio_max_global = calcular_janela_inicio(
             config.mes_inicio_idx,
             config.mes_termino_idx,
             config.duracao_curso,
-            meses_ferias,
+            bloqueados,
             len(meses),
             meses
         )
@@ -326,7 +348,8 @@ def converter_projetos_para_modelo(
                 config.mes_termino_idx,
                 config.turmas_min_por_mes,
                 config.nome,
-                0
+                0,
+                config.permite_ferias_escolares
             ))
             print(
                 f"   ✓ {config.nome}: {prog_total} PROG, {rob_total} ROB | "
@@ -359,7 +382,7 @@ def converter_projetos_para_modelo(
                     config.mes_termino_idx,
                     config.duracao_curso,
                     ondas_restantes,
-                    meses_ferias,
+                    bloqueados,
                     len(meses)
                 )
 
@@ -392,14 +415,15 @@ def converter_projetos_para_modelo(
                     config.mes_termino_idx,
                     config.turmas_min_por_mes,
                     config.nome,
-                    onda_idx
+                    onda_idx,
+                    config.permite_ferias_escolares
                 ))
 
                 # Avançar início mínimo para a próxima onda
                 inicio_min_onda = _avancar_inicio_min_pos_onda(
                     inicio_min_onda,
                     config.duracao_curso,
-                    meses_ferias,
+                    bloqueados,
                     len(meses)
                 )
 
@@ -479,7 +503,8 @@ def analisar_distribuicao_instrutores_por_projeto(
 def calcular_fluxo_caixa_detalhado(
     atribuicoes: List[Dict],
     meses: List[str],
-    meses_ferias_idx: List[int],
+    meses_recesso_idx: List[int],
+    meses_ferias_escolares_idx: List[int],
     parametros_financeiros: ParametrosFinanceiros,
     projeto_filtro: Optional[str] = None
 ) -> pd.DataFrame:
@@ -498,8 +523,11 @@ def calcular_fluxo_caixa_detalhado(
         nome_proj = t.projeto.split('_Onda')[0]
         if projeto_filtro and nome_proj != projeto_filtro:
             continue
+        bloqueados_t = calcular_meses_bloqueados(
+            t.permite_ferias_escolares, meses_recesso_idx, meses_ferias_escolares_idx
+        )
         for m in calcular_meses_ativos(
-            t.mes_inicio, t.duracao, meses_ferias_idx, num_meses
+            t.mes_inicio, t.duracao, bloqueados_t, num_meses
         ):
             instrutores_ativos_no_mes[m].add(atr['instrutor'].id)
 
@@ -537,10 +565,14 @@ def calcular_fluxo_caixa_detalhado(
                     for atr in atribuicoes:
                         pn = atr['turma'].projeto.split('_Onda')[0]
                         if pn == item.projeto:
+                            bloqueados_atr = calcular_meses_bloqueados(
+                                atr['turma'].permite_ferias_escolares,
+                                meses_recesso_idx, meses_ferias_escolares_idx
+                            )
                             for m in calcular_meses_ativos(
                                 atr['turma'].mes_inicio,
                                 atr['turma'].duracao,
-                                meses_ferias_idx, num_meses
+                                bloqueados_atr, num_meses
                             ):
                                 ativos_proj[m].add(atr['instrutor'].id)
                     for m in range(num_meses):
@@ -554,8 +586,11 @@ def calcular_fluxo_caixa_detalhado(
         if projeto_filtro and nome_p != projeto_filtro:
             continue
 
+        bloqueados_t = calcular_meses_bloqueados(
+            t.permite_ferias_escolares, meses_recesso_idx, meses_ferias_escolares_idx
+        )
         ma = calcular_meses_ativos(
-            t.mes_inicio, t.duracao, meses_ferias_idx, num_meses
+            t.mes_inicio, t.duracao, bloqueados_t, num_meses
         )
         if not ma:
             continue
@@ -594,7 +629,8 @@ def calcular_fluxo_caixa_detalhado(
 def calcular_evolucao_instrutores(
     atribuicoes: List[Dict],
     meses: List[str],
-    meses_ferias_idx: List[int]
+    meses_recesso_idx: List[int],
+    meses_ferias_escolares_idx: List[int]
 ) -> pd.DataFrame:
     """
     Quantidade de instrutores únicos ativos por mês, por tipologia.
@@ -605,8 +641,11 @@ def calcular_evolucao_instrutores(
     for atr in atribuicoes:
         t = atr['turma']
         i = atr['instrutor']
+        bloqueados_t = calcular_meses_bloqueados(
+            t.permite_ferias_escolares, meses_recesso_idx, meses_ferias_escolares_idx
+        )
         for m in calcular_meses_ativos(
-            t.mes_inicio, t.duracao, meses_ferias_idx, num_meses
+            t.mes_inicio, t.duracao, bloqueados_t, num_meses
         ):
             instrutores_ativos[m][i.habilidade].add(i.id)
 
@@ -630,7 +669,8 @@ def calcular_evolucao_instrutores(
 def calcular_lower_bounds(
     projetos: List[Projeto],
     meses: List[str],
-    meses_ferias_idx: List[int],
+    meses_recesso_idx: List[int],
+    meses_ferias_escolares_idx: List[int],
     capacidade: int
 ) -> Dict[str, Dict[str, int]]:
     """
@@ -659,8 +699,11 @@ def calcular_lower_bounds(
                 qtd = p.prog if hab == 'PROG' else p.rob
                 if qtd == 0:
                     continue
+                bloqueados_p = calcular_meses_bloqueados(
+                    p.permite_ferias_escolares, meses_recesso_idx, meses_ferias_escolares_idx
+                )
                 for m in calcular_meses_ativos(
-                    p.inicio_min, p.duracao, meses_ferias_idx, num_meses
+                    p.inicio_min, p.duracao, bloqueados_p, num_meses
                 ):
                     demanda_por_mes[m] += qtd
 
@@ -672,9 +715,13 @@ def calcular_lower_bounds(
 
             meses_letivos_proj = sum(
                 1 for m in range(num_meses)
-                if m not in meses_ferias_idx
-                and any(p.inicio_min <= m <= p.mes_fim_projeto
-                        for p in ondas_pai)
+                if any(
+                    p.inicio_min <= m <= p.mes_fim_projeto
+                    and m not in calcular_meses_bloqueados(
+                        p.permite_ferias_escolares, meses_recesso_idx, meses_ferias_escolares_idx
+                    )
+                    for p in ondas_pai
+                )
             )
             cap_total = capacidade * meses_letivos_proj
             lb2 = math.ceil(total_hab / cap_total) if cap_total > 0 else 1

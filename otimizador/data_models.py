@@ -17,7 +17,8 @@ Projeto = namedtuple('Projeto', [
     'mes_fim_projeto', # int  — índice do mês de término do projeto pai
     'min_turmas',      # int  — mínimo de turmas ativas por mês
     'projeto_pai',     # str  — nome do projeto original (sem sufixo _OndaX)
-    'onda_idx'         # int  — índice da onda (0-based) dentro do projeto pai
+    'onda_idx',        # int  — índice da onda (0-based) dentro do projeto pai
+    'permite_ferias_escolares'  # bool — roda em férias escolares (não em recesso)
 ])
 
 Instrutor = namedtuple('Instrutor', [
@@ -25,7 +26,8 @@ Instrutor = namedtuple('Instrutor', [
 ])
 
 Turma = namedtuple('Turma', [
-    'id', 'projeto', 'habilidade', 'mes_inicio', 'duracao'
+    'id', 'projeto', 'habilidade', 'mes_inicio', 'duracao',
+    'permite_ferias_escolares'  # bool — roda em férias escolares (não em recesso)
 ])
 
 
@@ -44,6 +46,7 @@ class ConfiguracaoProjeto:
     ondas: int = 1
     percentual_prog: float = 60.0
     turmas_min_por_mes: int = 1
+    permite_ferias_escolares: bool = False
 
     mes_inicio_idx: int = field(default=None, init=False)
     mes_termino_idx: int = field(default=None, init=False)
@@ -95,7 +98,10 @@ class ParametrosOtimizacao:
     """Parâmetros globais para otimização."""
     capacidade_max_instrutor: int   = 6
     spread_maximo: int              = 4
-    meses_ferias: List[str]         = field(
+    meses_recesso: List[str]        = field(
+        default_factory=lambda: ['Dez/26']
+    )
+    meses_ferias_escolares: List[str] = field(
         default_factory=lambda: ['Jul/26', 'Dez/26']
     )
     timeout_segundos: int           = 180

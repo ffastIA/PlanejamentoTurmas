@@ -21,7 +21,8 @@ def gerar_planilha_consolidada_instrutor(atribuicoes: List[Dict]) -> pd.DataFram
     return resumo.sort_values(['Habilidade', 'Instrutor_ID'])
 
 
-def gerar_planilha_detalhada(atribuicoes: List[Dict], meses: List[str], meses_ferias_idx: List[int],
+def gerar_planilha_detalhada(atribuicoes: List[Dict], meses: List[str],
+                             meses_recesso_idx: List[int], meses_ferias_escolares_idx: List[int],
                              parametros_financeiros: ParametrosFinanceiros = None):
     # Aba 1: Detalhada
     dados = [{'Instrutor': a['instrutor'].id, 'Turma': a['turma'].id, 'Inicio': meses[a['turma'].mes_inicio]} for a in
@@ -31,7 +32,9 @@ def gerar_planilha_detalhada(atribuicoes: List[Dict], meses: List[str], meses_fe
     # Aba 2: Fluxo de Caixa (Usando a nova lógica centralizada)
     df_financeiro = pd.DataFrame()
     if parametros_financeiros:
-        df_financeiro = calcular_fluxo_caixa_detalhado(atribuicoes, meses, meses_ferias_idx, parametros_financeiros)
+        df_financeiro = calcular_fluxo_caixa_detalhado(
+            atribuicoes, meses, meses_recesso_idx, meses_ferias_escolares_idx, parametros_financeiros
+        )
 
     try:
         with pd.ExcelWriter('resultados_otimizacao/Detalhamento_Completo.xlsx', engine='openpyxl') as writer:

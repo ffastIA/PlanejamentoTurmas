@@ -19,14 +19,15 @@ from collections import defaultdict
 import math
 
 from ..data_models import Projeto, Turma, Instrutor, ParametrosOtimizacao
-from ..utils import calcular_meses_ativos
+from ..utils import calcular_meses_ativos, calcular_meses_bloqueados
 
 
 def otimizar_atribuicao_e_carga(
     cronograma_estagio1: List[Dict],
     projetos: List[Projeto],
     meses: List[str],
-    meses_ferias_idx: List[int],
+    meses_recesso_idx: List[int],
+    meses_ferias_escolares_idx: List[int],
     parametros: ParametrosOtimizacao
 ) -> Dict[str, Any]:
     """
@@ -54,7 +55,8 @@ def otimizar_atribuicao_e_carga(
                 projeto=item['projeto_nome'],
                 habilidade=item['habilidade'],
                 mes_inicio=item['mes_inicio'],
-                duracao=item['duracao']
+                duracao=item['duracao'],
+                permite_ferias_escolares=item['permite_ferias_escolares']
             )
             turmas_objetos.append(turma)
 
@@ -67,11 +69,11 @@ def otimizar_atribuicao_e_carga(
     print(f"Turmas criadas: PROG={len(turmas_prog)}, ROB={len(turmas_rob)}")
 
     pool_prog = _dimensionar_pool(
-        turmas_prog, meses_ferias_idx, len(meses),
+        turmas_prog, meses_recesso_idx, meses_ferias_escolares_idx, len(meses),
         parametros.capacidade_max_instrutor, 'PROG'
     )
     pool_rob = _dimensionar_pool(
-        turmas_rob, meses_ferias_idx, len(meses),
+        turmas_rob, meses_recesso_idx, meses_ferias_escolares_idx, len(meses),
         parametros.capacidade_max_instrutor, 'ROBOTICA'
     )
 
@@ -91,10 +93,12 @@ def otimizar_atribuicao_e_carga(
     ]
 
     atribuicoes_prog, desvio_prog = _resolver_subproblema(
-        'PROG', turmas_prog, instrutores_prog, meses, meses_ferias_idx, parametros
+        'PROG', turmas_prog, instrutores_prog, meses,
+        meses_recesso_idx, meses_ferias_escolares_idx, parametros
     )
     atribuicoes_rob, desvio_rob = _resolver_subproblema(
-        'ROBOTICA', turmas_rob, instrutores_rob, meses, meses_ferias_idx, parametros
+        'ROBOTICA', turmas_rob, instrutores_rob, meses,
+        meses_recesso_idx, meses_ferias_escolares_idx, parametros
     )
 
     atribuicoes_total: List[Dict] = []
@@ -126,7 +130,8 @@ def otimizar_atribuicao_e_carga(
 
 def _dimensionar_pool(
     turmas: List[Turma],
-    meses_ferias_idx: List[int],
+    meses_recesso_idx: List[int],
+    meses_ferias_escolares_idx: List[int],
     num_meses: int,
     capacidade: int,
     habilidade: str
@@ -135,8 +140,11 @@ def _dimensionar_pool(
         return 0
     demanda_por_mes: Dict[int, int] = defaultdict(int)
     for turma in turmas:
+        bloqueados_t = calcular_meses_bloqueados(
+            turma.permite_ferias_escolares, meses_recesso_idx, meses_ferias_escolares_idx
+        )
         for mes in calcular_meses_ativos(
-            turma.mes_inicio, turma.duracao, meses_ferias_idx, num_meses
+            turma.mes_inicio, turma.duracao, bloqueados_t, num_meses
         ):
             demanda_por_mes[mes] += 1
     pico = max(demanda_por_mes.values()) if demanda_por_mes else 0
@@ -151,7 +159,8 @@ def _resolver_subproblema(
     turmas: List[Turma],
     instrutores: List[Instrutor],
     meses: List[str],
-    meses_ferias_idx: List[int],
+    meses_recesso_idx: List[int],
+    meses_ferias_escolares_idx: List[int],
     parametros: ParametrosOtimizacao
 ) -> Tuple[Optional[List[Dict]], Optional[int]]:
     """
@@ -166,11 +175,14 @@ def _resolver_subproblema(
     num_turmas = len(turmas)
     num_inst = len(instrutores)
     num_meses = len(meses)
-    meses_letivos = [m for m in range(num_meses) if m not in meses_ferias_idx]
 
     meses_ativos_turma = {
         t_idx: calcular_meses_ativos(
-            turma.mes_inicio, turma.duracao, meses_ferias_idx, num_meses
+            turma.mes_inicio, turma.duracao,
+            calcular_meses_bloqueados(
+                turma.permite_ferias_escolares, meses_recesso_idx, meses_ferias_escolares_idx
+            ),
+            num_meses
         )
         for t_idx, turma in enumerate(turmas)
     }
@@ -179,7 +191,10 @@ def _resolver_subproblema(
         for mes in ma:
             turmas_no_mes[mes].append(t_idx)
 
-    meses_com_turma = [m for m in meses_letivos if turmas_no_mes.get(m)]
+    # Meses com capacidade a controlar (R2): qualquer mês com turma ativa,
+    # inclusive um mês de férias escolares em que só turmas isentas rodam —
+    # não apenas os meses "letivos" fora da lista global de bloqueio.
+    meses_com_turma = sorted(turmas_no_mes.keys())
     projetos_presentes = set(t.projeto for t in turmas)
 
     print(
@@ -229,7 +244,7 @@ def _resolver_subproblema(
     # R2: Capacidade mensal
     # -------------------------------------------------------------------------
     for i in range(num_inst):
-        for m in meses_letivos:
+        for m in meses_com_turma:
             tm = turmas_no_mes.get(m, [])
             if tm:
                 model.Add(
@@ -250,10 +265,18 @@ def _resolver_subproblema(
             model.AddBoolOr([x[i, t] for t in tm] + [y[i, m].Not()])
 
     # -------------------------------------------------------------------------
-    # R3: Sem atribuições em meses de férias (redundante, mas explícito)
+    # R3: Sem atribuições em meses bloqueados (redundante, mas explícito)
+    #   Recesso institucional bloqueia toda turma (instrutor indisponível).
+    #   Férias escolares só bloqueiam quem não tem a tag permite_ferias_escolares.
     # -------------------------------------------------------------------------
-    for m in meses_ferias_idx:
+    for m in meses_recesso_idx:
         for t in turmas_no_mes.get(m, []):
+            for i in range(num_inst):
+                model.Add(x[i, t] == 0)
+    for m in meses_ferias_escolares_idx:
+        for t in turmas_no_mes.get(m, []):
+            if turmas[t].permite_ferias_escolares:
+                continue
             for i in range(num_inst):
                 model.Add(x[i, t] == 0)
 

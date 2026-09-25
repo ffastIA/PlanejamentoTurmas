@@ -104,10 +104,14 @@ def main():
         print(f"\n[INFO] Período: {dt_min.strftime('%d/%m/%Y')} a {dt_max.strftime('%d/%m/%Y')}")
 
         meses = gerar_lista_meses(dt_min.strftime("%d/%m/%Y"), dt_max.strftime("%d/%m/%Y"))
-        meses_ferias_idx = [meses.index(m) for m in parametros.meses_ferias if m in meses]
+        meses_recesso_idx = [meses.index(m) for m in parametros.meses_recesso if m in meses]
+        meses_ferias_escolares_idx = [
+            meses.index(m) for m in parametros.meses_ferias_escolares if m in meses
+        ]
 
         print(f"[INFO] Total de meses: {len(meses)}")
-        print(f"[INFO] Meses de férias: {len(meses_ferias_idx)} ({', '.join([meses[i] for i in meses_ferias_idx])})")
+        print(f"[INFO] Meses de recesso: {len(meses_recesso_idx)} ({', '.join([meses[i] for i in meses_recesso_idx])})")
+        print(f"[INFO] Meses de férias escolares: {len(meses_ferias_escolares_idx)} ({', '.join([meses[i] for i in meses_ferias_escolares_idx])})")
 
         # ========================================================================
         # ETAPA 2.5: VALIDAÇÃO DE VIABILIDADE
@@ -142,7 +146,9 @@ def main():
         print("ETAPA 3: CONVERSÃO DE PROJETOS PARA MODELO")
         print("=" * 80)
 
-        projetos_modelo = converter_projetos_para_modelo(projetos_config, meses, meses_ferias_idx, parametros)
+        projetos_modelo = converter_projetos_para_modelo(
+            projetos_config, meses, meses_recesso_idx, meses_ferias_escolares_idx, parametros
+        )
 
         print(f"\n[✓] {len(projetos_modelo)} projetos convertidos para modelo")
 
@@ -184,7 +190,8 @@ def main():
             resultados_estagio1['cronograma'],
             projetos_modelo,
             meses,
-            meses_ferias_idx,
+            meses_recesso_idx,
+            meses_ferias_escolares_idx,
             parametros
         )
 
@@ -257,7 +264,8 @@ def main():
             spreadsheets.gerar_planilha_detalhada(
                 resultados_estagio2['atribuicoes'],
                 meses,
-                meses_ferias_idx,
+                meses_recesso_idx,
+                meses_ferias_escolares_idx,
                 parametros_financeiros
             )
             print("      ✓ Planilhas Excel geradas com sucesso")
@@ -275,7 +283,8 @@ def main():
                 resultados_estagio2['turmas'],
                 projetos_modelo,
                 meses,
-                meses_ferias_idx,
+                meses_recesso_idx,
+                meses_ferias_escolares_idx,
                 projeto_filtro=None
             )
             print("      ✓ Cronograma Consolidado")
@@ -289,7 +298,8 @@ def main():
                     resultados_estagio2['turmas'],
                     projetos_modelo,
                     meses,
-                    meses_ferias_idx,
+                    meses_recesso_idx,
+                    meses_ferias_escolares_idx,
                     projeto_filtro=proj.nome
                 )
                 if path:
@@ -323,7 +333,8 @@ def main():
                 resultados_estagio2['turmas'],
                 projetos_modelo,
                 meses,
-                meses_ferias_idx
+                meses_recesso_idx,
+                meses_ferias_escolares_idx
             )
             print("      ✓ Gráfico Demanda PROG vs ROB")
         except Exception as e:
@@ -335,7 +346,8 @@ def main():
                 resultados_estagio2['turmas'],
                 projetos_modelo,
                 meses,
-                meses_ferias_idx
+                meses_recesso_idx,
+                meses_ferias_escolares_idx
             )
             print("      ✓ Gráfico Conclusões por Mês")
         except Exception as e:
@@ -347,7 +359,8 @@ def main():
             graficos['evolucao_instrutores'], df_evolucao_instrutores = plotting.gerar_grafico_evolucao_instrutores(
                 resultados_estagio2['atribuicoes'],
                 meses,
-                meses_ferias_idx
+                meses_recesso_idx,
+                meses_ferias_escolares_idx
             )
             print("      ✓ Gráfico Evolução de Instrutores")
         except Exception as e:
@@ -361,7 +374,8 @@ def main():
                 graficos['financeiro_consolidado'] = plotting.gerar_grafico_fluxo_caixa(
                     resultados_estagio2['atribuicoes'],
                     meses,
-                    meses_ferias_idx,
+                    meses_recesso_idx,
+                    meses_ferias_escolares_idx,
                     parametros_financeiros
                 )
                 print("      ✓ Fluxo de Caixa Consolidado")
@@ -373,7 +387,8 @@ def main():
                     path = plotting.gerar_grafico_fluxo_caixa(
                         resultados_estagio2['atribuicoes'],
                         meses,
-                        meses_ferias_idx,
+                        meses_recesso_idx,
+                        meses_ferias_escolares_idx,
                         parametros_financeiros,
                         projeto_filtro=proj.nome
                     )
@@ -390,7 +405,8 @@ def main():
                 resultados_estagio1['cronograma'],
                 resultados_estagio2['turmas'],
                 meses,
-                meses_ferias_idx
+                meses_recesso_idx,
+                meses_ferias_escolares_idx
             )
 
             with open("resultados_otimizacao/diagnostico_fluxo_dados.txt", "w", encoding="utf-8") as f:

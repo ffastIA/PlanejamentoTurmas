@@ -549,7 +549,8 @@ def gerar_relatorio_pdf(
             df_proj = calcular_fluxo_caixa_detalhado(
                 resultados_estagio2['atribuicoes'],
                 meses,
-                resultados_estagio1.get('meses_ferias', []),
+                resultados_estagio1.get('meses_recesso', []),
+                resultados_estagio1.get('meses_ferias_escolares', []),
                 parametros_financeiros,
                 projeto_filtro=proj.nome
             )
@@ -602,7 +603,8 @@ def gerar_relatorio_pdf(
         df_fin = calcular_fluxo_caixa_detalhado(
             resultados_estagio2['atribuicoes'],
             meses,
-            resultados_estagio1.get('meses_ferias', []),
+            resultados_estagio1.get('meses_recesso', []),
+            resultados_estagio1.get('meses_ferias_escolares', []),
             parametros_financeiros
         )
 

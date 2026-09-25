@@ -77,7 +77,16 @@ def carregar_configuracao(arquivo: Optional[Path] = None) -> Tuple[
         with open(arquivo, 'r', encoding='utf-8') as f:
             data = json.load(f)
 
-        params = ParametrosOtimizacao(**data.get("parametros", {}))
+        params_data = dict(data.get("parametros", {}))
+        if 'meses_ferias' in params_data:
+            # Migração de configs antigas (campo único): tudo que já era
+            # "férias" vira recesso institucional (bloqueio universal),
+            # preservando o comportamento anterior. O usuário reclassifica
+            # manualmente os meses que forem só férias escolares.
+            legado = params_data.pop('meses_ferias')
+            params_data.setdefault('meses_recesso', legado)
+            params_data.setdefault('meses_ferias_escolares', [])
+        params = ParametrosOtimizacao(**params_data)
 
         projs = []
         ignore = {'mes_inicio_idx', 'mes_termino_idx'}

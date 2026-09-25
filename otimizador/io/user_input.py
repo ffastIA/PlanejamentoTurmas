@@ -233,6 +233,18 @@ def _configurar_projeto_interativo(projeto_existente: Optional[ConfiguracaoProje
             f"Mínimo de turmas ativas/mês (exceto férias) [{projeto_existente.turmas_min_por_mes if is_editing else 1}]: ",
             projeto_existente.turmas_min_por_mes if is_editing else 1, 0, 100, "Mínimo Turmas")
 
+        default_permite_ferias = (
+            projeto_existente.permite_ferias_escolares if is_editing else False
+        )
+        permite_ferias_str = input(
+            f"Permite execução durante férias ESCOLARES "
+            f"(oficina / espaço tecnológico — não durante recesso institucional)? (S/N) "
+            f"[{'S' if default_permite_ferias else 'N'}]: "
+        ).strip().upper()
+        permite_ferias_escolares = (
+            permite_ferias_str == 'S' if permite_ferias_str else default_permite_ferias
+        )
+
         projeto = ConfiguracaoProjeto(
             nome=nome,
             data_inicio=data_inicio_str,
@@ -241,7 +253,8 @@ def _configurar_projeto_interativo(projeto_existente: Optional[ConfiguracaoProje
             duracao_curso=duracao_curso,
             ondas=ondas,
             percentual_prog=perc_prog,
-            turmas_min_por_mes=min_turmas
+            turmas_min_por_mes=min_turmas,
+            permite_ferias_escolares=permite_ferias_escolares
         )
         confirma = input("\nConfirmar? (S/N) [S]: ").strip().upper()
         return projeto if confirma in ('', 'S') else None
@@ -326,6 +339,8 @@ def exibir_resumo_parametros(params: ParametrosOtimizacao):
     print("\n" + "=" * 80 + "\nPARÂMETROS GLOBAIS\n" + "=" * 80)
     print(f"  • Capacidade: {params.capacidade_max_instrutor} | Spread: {params.spread_maximo} | Timeout: {params.timeout_segundos}s")
     print(f"  • Pesos: Instrutores={params.peso_instrutores}, Spread={params.peso_spread}, Monotonia={params.peso_monotonia}, Spread Mensal={params.peso_spread_mensal}")
+    print(f"  • Recesso institucional: {', '.join(params.meses_recesso) if params.meses_recesso else '(nenhum)'}")
+    print(f"  • Férias escolares: {', '.join(params.meses_ferias_escolares) if params.meses_ferias_escolares else '(nenhum)'}")
 
 
 def exibir_resumo_projetos(projetos: List[ConfiguracaoProjeto]):
@@ -334,4 +349,6 @@ def exibir_resumo_projetos(projetos: List[ConfiguracaoProjeto]):
     for p in projetos:
         print(f"\n  {p.nome}: {p.num_turmas} turmas, {p.duracao_curso} meses, {p.data_inicio}-{p.data_termino}")
         print(f"    Mínimo/mês: {p.turmas_min_por_mes} (exceto férias)")
+        if p.permite_ferias_escolares:
+            print(f"    Permite execução em férias escolares (oficina / espaço tecnológico)")
     print(f"\n  TOTAL: {sum(p.num_turmas for p in projetos)} turmas.")

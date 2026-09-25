@@ -38,8 +38,14 @@ def diagnosticar_restricoes(projetos_config: List[ConfiguracaoProjeto],
             continue
 
         duracao_meses_calendario = mes_fim_idx - mes_inicio_idx + 1
-        meses_ferias_no_periodo = sum(1 for m in parametros.meses_ferias
-                                      if m in meses[mes_inicio_idx:mes_fim_idx + 1])
+        meses_recesso_no_periodo = sum(1 for m in parametros.meses_recesso
+                                       if m in meses[mes_inicio_idx:mes_fim_idx + 1])
+        meses_ferias_escolares_no_periodo = 0 if proj.permite_ferias_escolares else sum(
+            1 for m in parametros.meses_ferias_escolares
+            if m in meses[mes_inicio_idx:mes_fim_idx + 1]
+            and m not in parametros.meses_recesso
+        )
+        meses_ferias_no_periodo = meses_recesso_no_periodo + meses_ferias_escolares_no_periodo
         duracao_meses_letivos = duracao_meses_calendario - meses_ferias_no_periodo
 
         meses_disponiveis_para_inicio = duracao_meses_letivos - proj.duracao_curso + 1

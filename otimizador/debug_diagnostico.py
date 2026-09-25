@@ -5,13 +5,14 @@ Script de Diagnóstico - Rastreia o fluxo de dados entre Stage 1 e Stage 2
 from typing import List, Dict, Any
 import pandas as pd
 from .data_models import Projeto, Turma
-from .utils import calcular_meses_ativos
+from .utils import calcular_meses_ativos, calcular_meses_bloqueados
 
 
 def diagnosticar_fluxo_dados(cronograma_stage1: List[Dict],
                              turmas_stage2: List[Turma],
                              meses: List[str],
-                             meses_ferias_idx: List[int]) -> Dict[str, Any]:
+                             meses_recesso_idx: List[int],
+                             meses_ferias_escolares_idx: List[int]) -> Dict[str, Any]:
     """
     Diagnóstico completo do fluxo de dados entre Stage 1 e Stage 2.
     Retorna um relatório detalhado das discrepâncias.
@@ -38,7 +39,10 @@ def diagnosticar_fluxo_dados(cronograma_stage1: List[Dict],
         mes_inicio = item['mes_inicio']
         duracao = item['duracao']
 
-        meses_ativos = calcular_meses_ativos(mes_inicio, duracao, meses_ferias_idx, num_meses)
+        bloqueados_item = calcular_meses_bloqueados(
+            item.get('permite_ferias_escolares', False), meses_recesso_idx, meses_ferias_escolares_idx
+        )
+        meses_ativos = calcular_meses_ativos(mes_inicio, duracao, bloqueados_item, num_meses)
         for m in meses_ativos:
             demanda_stage1[m] += qtd
 
@@ -63,7 +67,10 @@ def diagnosticar_fluxo_dados(cronograma_stage1: List[Dict],
     # Calcular demanda mensal conforme Stage 2
     demanda_stage2 = [0] * num_meses
     for turma in turmas_stage2:
-        meses_ativos = calcular_meses_ativos(turma.mes_inicio, turma.duracao, meses_ferias_idx, num_meses)
+        bloqueados_t = calcular_meses_bloqueados(
+            turma.permite_ferias_escolares, meses_recesso_idx, meses_ferias_escolares_idx
+        )
+        meses_ativos = calcular_meses_ativos(turma.mes_inicio, turma.duracao, bloqueados_t, num_meses)
         for m in meses_ativos:
             demanda_stage2[m] += 1
 

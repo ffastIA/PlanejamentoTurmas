@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 from typing import List, Dict, Tuple, Optional
-from ..utils import calcular_meses_ativos, calcular_fluxo_caixa_detalhado
+from ..utils import calcular_meses_ativos, calcular_meses_bloqueados, calcular_fluxo_caixa_detalhado
 from ..data_models import Projeto, Turma, ParametrosFinanceiros
 
 # Paleta de cores vibrantes
@@ -104,7 +104,8 @@ def gerar_grafico_turmas_projeto_mes(
     turmas: List[Turma],
     projetos: List[Projeto],
     meses: List[str],
-    meses_ferias_idx: List[int],
+    meses_recesso_idx: List[int],
+    meses_ferias_escolares_idx: List[int],
     projeto_filtro: str = None
 ) -> str:
     num_meses = len(meses)
@@ -125,8 +126,11 @@ def gerar_grafico_turmas_projeto_mes(
     for t in turmas_filtradas:
         nome_proj = t.projeto.split('_Onda')[0]
         if nome_proj in dados:
+            bloqueados_t = calcular_meses_bloqueados(
+                t.permite_ferias_escolares, meses_recesso_idx, meses_ferias_escolares_idx
+            )
             meses_at = calcular_meses_ativos(
-                t.mes_inicio, t.duracao, meses_ferias_idx, num_meses
+                t.mes_inicio, t.duracao, bloqueados_t, num_meses
             )
             for m in meses_at:
                 dados[nome_proj][m] += 1
@@ -287,7 +291,8 @@ def gerar_grafico_demanda_prog_rob(
     turmas: List[Turma],
     projetos: List[Projeto],
     meses: List[str],
-    meses_ferias_idx: List[int]
+    meses_recesso_idx: List[int],
+    meses_ferias_escolares_idx: List[int]
 ) -> Tuple[str, pd.DataFrame]:
 
     num_meses = len(meses)
@@ -295,8 +300,11 @@ def gerar_grafico_demanda_prog_rob(
     rob  = np.zeros(num_meses)
 
     for t in turmas:
+        bloqueados_t = calcular_meses_bloqueados(
+            t.permite_ferias_escolares, meses_recesso_idx, meses_ferias_escolares_idx
+        )
         meses_at = calcular_meses_ativos(
-            t.mes_inicio, t.duracao, meses_ferias_idx, num_meses
+            t.mes_inicio, t.duracao, bloqueados_t, num_meses
         )
         for m in meses_at:
             if t.habilidade == 'PROG':
@@ -385,14 +393,18 @@ def plotar_conclusoes_por_mes(
     turmas: List[Turma],
     projetos: List[Projeto],
     meses: List[str],
-    meses_ferias_idx: List[int]
+    meses_recesso_idx: List[int],
+    meses_ferias_escolares_idx: List[int]
 ) -> str:
     num_meses  = len(meses)
     conclusoes = np.zeros(num_meses)
 
     for t in turmas:
+        bloqueados_t = calcular_meses_bloqueados(
+            t.permite_ferias_escolares, meses_recesso_idx, meses_ferias_escolares_idx
+        )
         meses_at = calcular_meses_ativos(
-            t.mes_inicio, t.duracao, meses_ferias_idx, num_meses
+            t.mes_inicio, t.duracao, bloqueados_t, num_meses
         )
         if meses_at:
             conclusoes[meses_at[-1]] += 1
@@ -428,11 +440,12 @@ def plotar_conclusoes_por_mes(
 def gerar_grafico_evolucao_instrutores(
     atribuicoes: List[Dict],
     meses: List[str],
-    meses_ferias_idx: List[int]
+    meses_recesso_idx: List[int],
+    meses_ferias_escolares_idx: List[int]
 ) -> Tuple[str, pd.DataFrame]:
     from ..utils import calcular_evolucao_instrutores
     df = calcular_evolucao_instrutores(
-        atribuicoes, meses, meses_ferias_idx
+        atribuicoes, meses, meses_recesso_idx, meses_ferias_escolares_idx
     )
     if df.empty:
         return None, df
@@ -492,12 +505,13 @@ def gerar_grafico_evolucao_instrutores(
 def gerar_grafico_fluxo_caixa(
     atribuicoes: List[Dict],
     meses: List[str],
-    meses_ferias_idx: List[int],
+    meses_recesso_idx: List[int],
+    meses_ferias_escolares_idx: List[int],
     parametros_financeiros: ParametrosFinanceiros,
     projeto_filtro: str = None
 ) -> str:
     df = calcular_fluxo_caixa_detalhado(
-        atribuicoes, meses, meses_ferias_idx,
+        atribuicoes, meses, meses_recesso_idx, meses_ferias_escolares_idx,
         parametros_financeiros, projeto_filtro
     )
     if df.empty:

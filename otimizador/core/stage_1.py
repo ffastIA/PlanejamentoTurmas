@@ -4,7 +4,7 @@
 from ortools.sat.python import cp_model
 from typing import List, Dict, Any
 from ..data_models import Projeto, ParametrosOtimizacao
-from ..utils import calcular_meses_ativos
+from ..utils import calcular_meses_ativos, calcular_meses_bloqueados
 
 # Fator para converter peso 0.2 (cruzamento de férias) em inteiro:
 # peso_variacao * _W  →  normal
@@ -33,23 +33,37 @@ def otimizar_curva_demanda(
     num_meses = len(meses)
     pico_max = parametros.pico_maximo_turmas
 
-    meses_ferias_idx = [
-        meses.index(m) for m in parametros.meses_ferias if m in meses
+    meses_recesso_idx = [
+        meses.index(m) for m in parametros.meses_recesso if m in meses
+    ]
+    meses_ferias_escolares_idx = [
+        meses.index(m) for m in parametros.meses_ferias_escolares if m in meses
     ]
 
     print("\nParâmetros:")
     print(f"  Período:         {meses[0]} a {meses[-1]} ({num_meses} meses)")
-    print(f"  Férias:          {[meses[i] for i in meses_ferias_idx]}")
+    print(f"  Recesso:         {[meses[i] for i in meses_recesso_idx]}")
+    print(f"  Férias escolares:{[meses[i] for i in meses_ferias_escolares_idx]}")
     print(f"  Pico máx:        {pico_max} turmas")
     print(f"  Ondas:           {len(projetos)} entidades")
     print(f"  Peso monotonia:  {parametros.peso_monotonia}")
 
     # Diagnóstico estrutural mínimo por projeto
     for proj in projetos:
-        limite_superior = min(proj.mes_fim_projeto, num_meses - 1)
+        bloqueados_proj = calcular_meses_bloqueados(
+            proj.permite_ferias_escolares, meses_recesso_idx, meses_ferias_escolares_idx
+        )
+        # Limitar ao último mês que ESTA onda pode alcançar (início mais
+        # tardio possível), e não ao fim do projeto pai inteiro — ondas
+        # anteriores nunca ficam ativas até o fim do projeto por design.
+        ultimo_mes_onda = calcular_meses_ativos(
+            proj.inicio_max, proj.duracao, bloqueados_proj, num_meses
+        )
+        fim_alcancavel = ultimo_mes_onda[-1] if ultimo_mes_onda else proj.inicio_min
+        limite_superior = min(proj.mes_fim_projeto, num_meses - 1, fim_alcancavel)
         meses_obrigatorios = [
             m for m in range(proj.inicio_min, limite_superior + 1)
-            if m not in meses_ferias_idx
+            if m not in bloqueados_proj
         ]
         capacidade_total = (proj.prog + proj.rob) * proj.duracao
         demanda_min = len(meses_obrigatorios) * proj.min_turmas
@@ -103,9 +117,12 @@ def otimizar_curva_demanda(
             i_ant, proj_ant = ondas_ord[k]
             i_pos, proj_pos = ondas_ord[k + 1]
 
+            bloqueados_ant = calcular_meses_bloqueados(
+                proj_ant.permite_ferias_escolares, meses_recesso_idx, meses_ferias_escolares_idx
+            )
             for s_ant in range(proj_ant.inicio_min, proj_ant.inicio_max + 1):
                 ma_ant = calcular_meses_ativos(
-                    s_ant, proj_ant.duracao, meses_ferias_idx, num_meses
+                    s_ant, proj_ant.duracao, bloqueados_ant, num_meses
                 )
                 if not ma_ant:
                     continue
@@ -120,8 +137,11 @@ def otimizar_curva_demanda(
     # -------------------------------------------------------------------------
     demanda_mensal_valores = [[] for _ in range(num_meses)]
     for i, proj in enumerate(projetos):
+        bloqueados_proj = calcular_meses_bloqueados(
+            proj.permite_ferias_escolares, meses_recesso_idx, meses_ferias_escolares_idx
+        )
         for s in range(proj.inicio_min, proj.inicio_max + 1):
-            ma = calcular_meses_ativos(s, proj.duracao, meses_ferias_idx, num_meses)
+            ma = calcular_meses_ativos(s, proj.duracao, bloqueados_proj, num_meses)
             for m in ma:
                 demanda_mensal_valores[m].append(x[i, s])
 
@@ -142,12 +162,22 @@ def otimizar_curva_demanda(
     for i, proj in enumerate(projetos):
         if proj.min_turmas <= 0:
             continue
-        for m in range(proj.inicio_min, min(proj.mes_fim_projeto, num_meses - 1) + 1):
-            if m in meses_ferias_idx:
+        bloqueados_proj = calcular_meses_bloqueados(
+            proj.permite_ferias_escolares, meses_recesso_idx, meses_ferias_escolares_idx
+        )
+        # Mesmo raciocínio do diagnóstico estrutural acima: limitar ao
+        # último mês que ESTA onda pode alcançar, não ao fim do projeto pai.
+        ultimo_mes_onda = calcular_meses_ativos(
+            proj.inicio_max, proj.duracao, bloqueados_proj, num_meses
+        )
+        fim_alcancavel = ultimo_mes_onda[-1] if ultimo_mes_onda else proj.inicio_min
+        limite_superior_onda = min(proj.mes_fim_projeto, num_meses - 1, fim_alcancavel)
+        for m in range(proj.inicio_min, limite_superior_onda + 1):
+            if m in bloqueados_proj:
                 continue
             vars_ativas = []
             for s in range(proj.inicio_min, proj.inicio_max + 1):
-                ma = calcular_meses_ativos(s, proj.duracao, meses_ferias_idx, num_meses)
+                ma = calcular_meses_ativos(s, proj.duracao, bloqueados_proj, num_meses)
                 if m in ma:
                     vars_ativas.append(x[i, s])
             if vars_ativas:
@@ -162,9 +192,14 @@ def otimizar_curva_demanda(
     # -------------------------------------------------------------------------
     # Meses monitorados e alvos variáveis
     # -------------------------------------------------------------------------
+    # Um mês só tem var de demanda quando alguma turma está ativa nele — em
+    # recesso isso nunca acontece (bloqueia todo mundo); em férias escolares
+    # só acontece se algum projeto isento (permite_ferias_escolares) tiver
+    # turma ativa ali. Por isso basta checar `demanda_mensal_vars` para
+    # suavizar corretamente também os meses de férias escolares com atividade.
     meses_monitorados = [
         m for m in range(num_meses)
-        if m not in meses_ferias_idx and m in demanda_mensal_vars
+        if m in demanda_mensal_vars
     ]
 
     total_demanda_ativa = sum(
@@ -211,8 +246,6 @@ def otimizar_curva_demanda(
     # Penalização de quedas entre meses letivos adjacentes
     queda: Dict[int, cp_model.IntVar] = {}
     for m in range(num_meses - 1):
-        if m in meses_ferias_idx or (m + 1) in meses_ferias_idx:
-            continue
         if m not in demanda_mensal_vars or (m + 1) not in demanda_mensal_vars:
             continue
         q = model.NewIntVar(0, pico_max, f'queda_{m}')
@@ -272,7 +305,7 @@ def otimizar_curva_demanda(
     status = solver.Solve(model)
 
     if status not in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
-        print("\n[ERRO] Solver não encontrou solução viável.")
+        print(f"\n[ERRO] Solver não encontrou solução viável. Status CP-SAT: {solver.StatusName(status)}")
         print("Possíveis causas:")
         print("  1. Ondas com janela inválida")
         print("  2. Pico máximo muito baixo para o volume de turmas")
@@ -308,7 +341,8 @@ def otimizar_curva_demanda(
                     'mes_inicio': j,
                     'qtd': qtd_prog,
                     'duracao': proj.duracao,
-                    'habilidade': 'PROG'
+                    'habilidade': 'PROG',
+                    'permite_ferias_escolares': proj.permite_ferias_escolares
                 })
             if qtd_rob > 0:
                 cronograma.append({
@@ -319,7 +353,8 @@ def otimizar_curva_demanda(
                     'mes_inicio': j,
                     'qtd': qtd_rob,
                     'duracao': proj.duracao,
-                    'habilidade': 'ROBOTICA'
+                    'habilidade': 'ROBOTICA',
+                    'permite_ferias_escolares': proj.permite_ferias_escolares
                 })
 
     demanda_final = [
@@ -379,14 +414,13 @@ def otimizar_curva_demanda(
         ok = '✓' if dem <= pico_max else '✗'
         tendencia = ''
         if m > 0 and demanda_final[m - 1] > 0:
-            if m not in meses_ferias_idx and (m - 1) not in meses_ferias_idx:
-                diff = dem - demanda_final[m - 1]
-                if diff > 0:
-                    tendencia = f' ↑(+{diff})'
-                elif diff < 0:
-                    tendencia = f' ↓({diff})'
-                else:
-                    tendencia = ' →(=)'
+            diff = dem - demanda_final[m - 1]
+            if diff > 0:
+                tendencia = f' ↑(+{diff})'
+            elif diff < 0:
+                tendencia = f' ↓({diff})'
+            else:
+                tendencia = ' →(=)'
         print(f"    {ok} {meses[m]}: {dem} turmas{tendencia}")
 
     return {
@@ -394,5 +428,6 @@ def otimizar_curva_demanda(
         'cronograma': cronograma,
         'pico_max': pico_real,
         'demanda_mensal': demanda_final,
-        'meses_ferias': meses_ferias_idx
+        'meses_recesso': meses_recesso_idx,
+        'meses_ferias_escolares': meses_ferias_escolares_idx
     }
