@@ -1,415 +1,648 @@
-# ARQUIVO: otimizador/reporting/pdf_generator.py
 """
-Módulo responsável pela geração de relatórios em PDF.
+Módulo de geração de relatórios PDF
+Versão 4.1 — Novo indicador: Ociosidade Mensal (Seção 7)
+             Seção financeira renumerada para 8
 """
 
-import os
-from pathlib import Path
 from fpdf import FPDF
-from fpdf.enums import XPos, YPos
-import pandas as pd
-from typing import List, Dict
 from datetime import datetime
+from typing import Dict, List
+import pandas as pd
+from ..data_models import ConfiguracaoProjeto, ParametrosFinanceiros
+from ..utils import calcular_fluxo_caixa_detalhado, calcular_meses_ativos
 
-# Import relativo
-from ..data_models import ConfiguracaoProjeto
 
-
-class PDF(FPDF):
-    """Classe personalizada para geração de PDFs com formatação específica."""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.alias_nb_pages()
-        self.font_family = 'Helvetica'
-        self.bullet = '-'
-
-        # Tentar carregar fontes Unicode
-        try:
-            # O caminho correto deve ser relativo ao arquivo atual
-            font_dir = Path(__file__).parent.parent.parent / "assets" / "fonts"
-            self.add_font('DejaVu', '', str(font_dir / 'DejaVuSans.ttf'))
-            self.add_font('DejaVu', 'B', str(font_dir / 'DejaVuSans-Bold.ttf'))
-            self.add_font('DejaVu', 'I', str(font_dir / 'DejaVuSans-Oblique.ttf'))
-            self.font_family = 'DejaVu'
-            self.bullet = '•'
-            print("[PDF] Fonte Unicode 'DejaVu' carregada com sucesso.")
-        except (FileNotFoundError, RuntimeError) as e:
-            print(f"\n[AVISO PDF] Fontes Unicode não encontradas. Usando fonte padrão. Erro: {e}\n")
+class PDFRelatorio(FPDF):
+    """Classe para geração de relatórios PDF"""
 
     def header(self):
-        """Cabeçalho de cada página."""
-        self.set_font(self.font_family, 'B', 16)
-        self.cell(0, 10, 'Relatório Executivo de Otimização',
-                  new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
-        self.set_font(self.font_family, '', 10)
-        self.cell(0, 8, 'Planejamento de Alocação de Instrutores',
-                  new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
-        # Inserção do Timestamp
-        self.set_font(self.font_family, '', 8)
-        timestamp = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-        self.cell(0, 8, f'Gerado em: {timestamp}', new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
+        """Cabeçalho das páginas"""
+        self.set_font('Arial', 'B', 14)
+        self.cell(
+            0, 10,
+            'Relatorio de Planejamento de Turmas e Instrutores',
+            0, 1, 'C'
+        )
         self.ln(5)
 
     def footer(self):
-        """Rodapé de cada página."""
+        """Rodapé das páginas"""
         self.set_y(-15)
-        self.set_font(self.font_family, 'I', 8)
-        self.cell(0, 10, f'Página {self.page_no()} de {{nb}}', align='C')
+        self.set_font('Arial', 'I', 8)
+        self.cell(
+            0, 10,
+            f'Pagina {self.page_no()}/{{nb}} - '
+            f'Gerado em {datetime.now().strftime("%d/%m/%Y %H:%M")}',
+            0, 0, 'C'
+        )
 
-    def chapter_title(self, title: str):
-        """Adiciona um título de seção."""
-        self.set_font(self.font_family, 'B', 12)
-        self.set_fill_color(224, 235, 255)
-        self.cell(0, 10, title, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='L', fill=True)
+    def chapter_title(self, title):
+        """Título de seção"""
+        self.set_font('Arial', 'B', 12)
+        self.set_fill_color(220, 230, 240)
+        self.cell(0, 10, title, 0, 1, 'L', 1)
         self.ln(4)
 
-    def chapter_body(self, body: str):
-        """Adiciona corpo de texto."""
-        self.set_font(self.font_family, '', 10)
+    def chapter_body(self, body):
+        """Corpo de texto"""
+        self.set_font('Arial', '', 10)
         self.multi_cell(0, 5, body)
         self.ln()
 
-    def metric_box(self, title: str, value: str, interpretation: str = ''):
-        """Adiciona uma caixa de métrica destacada."""
-        self.set_font(self.font_family, 'B', 11)
-        self.cell(0, 7, title, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-
-        self.set_font(self.font_family, 'B', 18)
-        self.cell(0, 10, value, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-
-        if interpretation:
-            self.set_font(self.font_family, 'I', 9)
-            self.multi_cell(0, 5, interpretation)
-
-        self.ln(5)
-
-    def add_image_section(self, title: str, image_path: str, description: str = ''):
-        """Adiciona uma seção com imagem."""
-        if not image_path or not os.path.exists(image_path):
-            return
-
-        self.add_page()
-        self.chapter_title(title)
-
-        if description:
-            self.set_font(self.font_family, '', 10)
-            self.multi_cell(0, 5, description, align='L')
+    def add_image_centered(self, image_path, width=170):
+        """Adiciona imagem centralizada"""
+        if image_path:
+            if self.get_y() + (width * 0.6) > 270:
+                self.add_page()
+            self.image(image_path, x=(210 - width) / 2, w=width)
             self.ln(5)
 
-        try:
-            self.image(image_path, x=10, w=self.w - 20)
-        except Exception as e:
-            self.set_font(self.font_family, '', 10)
-            self.multi_cell(0, 10, f"Erro ao carregar imagem: {e}", align='C')
+    def create_table(self, header, data, col_widths):
+        """Cria tabela no PDF"""
+        estimativa_altura = len(data) * 6 + 10
+        if self.get_y() + estimativa_altura > 270:
+            self.add_page()
 
-        self.ln(5)
-
-    def add_table_from_dataframe(self, df: pd.DataFrame, title: str, max_rows: int = 25):
-        """Adiciona uma tabela a partir de um DataFrame."""
-        if df.empty:
-            return
-
-        self.add_page()
-        self.chapter_title(title)
-
-        self.set_font(self.font_family, 'B', 8)
-        self.set_fill_color(230, 230, 230)
-
-        # Calcular larguras das colunas
-        col_widths = {col: (self.w - 20) / len(df.columns) for col in df.columns}
-
-        # Cabeçalho
-        for col in df.columns:
-            self.cell(col_widths[col], 7, str(col), border=1, align='C', fill=True)
+        self.set_font('Arial', 'B', 9)
+        self.set_fill_color(240, 240, 240)
+        for col, width in zip(header, col_widths):
+            self.cell(width, 7, col, 1, 0, 'C', 1)
         self.ln()
 
-        # Dados
-        self.set_font(self.font_family, '', 7)
-
-        for idx, row in df.head(max_rows).iterrows():
-            for col in df.columns:
-                cell_text = str(row[col])
-                if len(cell_text) > 30:
-                    cell_text = cell_text[:27] + '...'
-
-                align = 'L' if isinstance(row[col], str) else 'R'
-                self.cell(col_widths[col], 6, cell_text, border=1, align=align)
+        self.set_font('Arial', '', 8)
+        fill = False
+        for row in data:
+            for item, width in zip(row, col_widths):
+                texto = (
+                    str(item)
+                    .encode('latin-1', 'replace')
+                    .decode('latin-1')
+                )
+                self.cell(width, 6, texto, 1, 0, 'C', fill)
             self.ln()
-
-        # Nota se houver mais linhas
-        if len(df) > max_rows:
-            self.set_font(self.font_family, 'I', 8)
-            self.cell(0, 6, f"... (mostrando {max_rows} de {len(df)} linhas)", align='C')
-            self.ln()
+            fill = not fill
 
 
-# ==============================================================================
-# A FUNÇÃO ABAIXO DEVE ESTAR FORA DA CLASSE PDF (SEM INDENTAÇÃO)
-# ==============================================================================
+# =============================================================================
+# FUNÇÃO AUXILIAR — CÁLCULO DE OCIOSIDADE MENSAL
+# =============================================================================
+
+def _calcular_ociosidade_mensal(
+    df_evolucao_instrutores: pd.DataFrame,
+    serie_temporal_df: pd.DataFrame,
+    capacidade_max_instrutor: int
+) -> pd.DataFrame:
+    """
+    Calcula o indicador de ociosidade mensal global.
+
+    Fórmula:
+      capacidade_total[m] = instrutores_ativos[m] × capacidade_max
+      turmas_ativas[m]    = demanda total do mês (PROG + ROB)
+      ocioso_abs[m]       = capacidade_total[m] - turmas_ativas[m]
+      ocioso_pct[m]       = ocioso_abs[m] / capacidade_total[m]
+
+    Fontes:
+      df_evolucao_instrutores → coluna 'Total' (instrutores ativos/mês)
+      serie_temporal_df       → coluna 'Total' (turmas ativas/mês)
+
+    Retorna DataFrame com colunas:
+      Mes, Instrutores_Ativos, Capacidade_Total,
+      Turmas_Ativas, Ociosidade_Abs, Ociosidade_Pct
+    """
+    if df_evolucao_instrutores is None \
+            or df_evolucao_instrutores.empty \
+            or serie_temporal_df is None \
+            or serie_temporal_df.empty:
+        return pd.DataFrame()
+
+    # Alinhar pelos meses presentes em ambos os DataFrames
+    df_evo  = df_evolucao_instrutores.set_index('Mes')
+    df_dem  = serie_temporal_df.set_index('Mes')
+    meses_comuns = df_evo.index.intersection(df_dem.index)
+
+    registros = []
+    for mes in meses_comuns:
+        inst_ativos     = int(df_evo.loc[mes, 'Total'])
+        turmas_ativas   = int(df_dem.loc[mes, 'Total'])
+        cap_total       = inst_ativos * capacidade_max_instrutor
+
+        if cap_total == 0:
+            # Mês sem instrutores ativos — ociosidade indefinida
+            continue
+
+        ocioso_abs = max(0, cap_total - turmas_ativas)
+        ocioso_pct = ocioso_abs / cap_total * 100
+
+        registros.append({
+            'Mes':              mes,
+            'Instrutores_Ativos': inst_ativos,
+            'Capacidade_Total': cap_total,
+            'Turmas_Ativas':    turmas_ativas,
+            'Ociosidade_Abs':   ocioso_abs,
+            'Ociosidade_Pct':   round(ocioso_pct, 1)
+        })
+
+    return pd.DataFrame(registros)
+
+
+# =============================================================================
+# FUNÇÃO PRINCIPAL
+# =============================================================================
 
 def gerar_relatorio_pdf(
-        projetos_config: List[ConfiguracaoProjeto],
-        resultados_estagio1: Dict,
-        resultados_estagio2: Dict,
-        graficos_paths: Dict,
-        serie_temporal_df: pd.DataFrame,
-        df_consolidada_instrutor: pd.DataFrame,
-        contagem_instrutores_hab: Dict[str, int],
-        distribuicao_por_projeto: Dict[str, Dict[str, int]],
-        pico_maximo_limite: int = 100  # <<< NOVO PARÂMETRO ADICIONADO
+    projetos_config: List[ConfiguracaoProjeto],
+    resultados_estagio1: Dict,
+    resultados_estagio2: Dict,
+    graficos_paths: Dict[str, str],
+    serie_temporal_df: pd.DataFrame,
+    df_consolidada_instrutor: pd.DataFrame,
+    contagem_instrutores_hab: Dict,
+    distribuicao_por_projeto: Dict,
+    pico_maximo_limite: int,
+    parametros_financeiros: ParametrosFinanceiros = None,
+    df_evolucao_instrutores: pd.DataFrame = None
 ):
     """
-    Gera o relatório executivo final em PDF.
+    Gera relatório PDF completo de otimização.
+
+    v4.1:
+      - Seção 7 (NOVA): Ociosidade Mensal — indicador global,
+        absoluto e percentual, derivado de df_evolucao_instrutores
+        e serie_temporal_df. Nenhum parâmetro novo na assinatura.
+      - Seção 8: Análise Financeira (era seção 7 na v4.0)
+      - Todo o restante do relatório permanece 100% inalterado.
+      - Nome com timestamp preservado da v4.0.
     """
-    print("\n--- Gerando Relatório Executivo PDF ---")
 
-    pdf = PDF('P', 'mm', 'A4')
+    pdf = PDFRelatorio()
+    pdf.alias_nb_pages()
     pdf.add_page()
 
-    bullet = pdf.bullet
+    # =========================================================================
+    # PRÉ-CÁLCULO: Pico correto de instrutores (v3.9)
+    # =========================================================================
+    pico_instrutores_real = 0
+    mes_pico              = "desconhecido"
+    instrutores_prog_pico = 0
+    instrutores_rob_pico  = 0
 
-    # ===========================
-    # 1. SUMÁRIO EXECUTIVO
-    # ===========================
-    pdf.chapter_title('1. Sumário Executivo')
-
-    total_instrutores = resultados_estagio2.get('total_instrutores_flex', 'N/A')
-    spread = resultados_estagio2.get('spread_carga', 'N/A')
-    pico_prog = resultados_estagio1.get('pico_prog', 'N/A')
-    pico_rob = resultados_estagio1.get('pico_rob', 'N/A')
-
-    pdf.metric_box(
-        "Total de Instrutores Necessários",
-        str(total_instrutores),
-        "Número total de profissionais necessários para cobrir toda a demanda do planejamento."
-    )
-
-    count_prog = contagem_instrutores_hab.get('PROG', 0)
-    count_rob = contagem_instrutores_hab.get('ROBOTICA', 0)
-
-    pdf.set_font(pdf.font_family, 'B', 10)
-    pdf.cell(0, 6, "Detalhamento por Habilidade:", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.set_font(pdf.font_family, '', 10)
-    pdf.multi_cell(0, 5,
-                   f"  {bullet} Instrutores de Programação: {count_prog}\n"
-                   f"  {bullet} Instrutores de Robótica: {count_rob}"
-                   )
-    pdf.ln(5)
-
-    pdf.metric_box(
-        "Pico de Demanda - Programação",
-        f"{pico_prog} Turmas/Mês",
-        "Momento de maior necessidade de instrutores de programação no planejamento."
-    )
-
-    pdf.metric_box(
-        "Pico de Demanda - Robótica",
-        f"{pico_rob} Turmas/Mês",
-        "Momento de maior necessidade de instrutores de robótica no planejamento."
-    )
-
-    pdf.metric_box(
-        "Balanceamento de Carga (Spread)",
-        str(spread),
-        "Diferença entre o instrutor mais e menos sobrecarregado. Quanto menor, mais equilibrado."
-    )
-
-    # ===========================
-    # 2. CONTEXTO DO PLANEJAMENTO
-    # ===========================
-    pdf.add_page()
-    pdf.chapter_title('2. Contexto do Planejamento')
-
-    pdf.set_font(pdf.font_family, '', 10)
-    pdf.multi_cell(0, 5,
-                   f"  {bullet} Período de Planejamento: {resultados_estagio1.get('periodo', 'N/A')}\n"
-                   f"  {bullet} Total de Meses: {resultados_estagio1.get('meses_total', 'N/A')}\n"
-                   f"  {bullet} Total de Projetos: {len(projetos_config)}\n"
-                   f"  {bullet} Spread Máximo Permitido: {resultados_estagio2.get('spread_max_permitido', 'N/A')}\n"
-                   f"  {bullet} Pico Máximo Consolidado: {pico_maximo_limite} turmas/mês"
-                   )
-    pdf.ln(5)
-
-    # ==========================================================
-    # 3. <<< NOVA SEÇÃO: DETALHAMENTO DO PICO CONSOLIDADO >>>
-    # ==========================================================
-    pdf.chapter_title('3. Detalhamento do Pico Consolidado Mensal')
-
-    pdf.chapter_body(
-        "A tabela a seguir apresenta a demanda de turmas ativas mês a mês, detalhando as "
-        "tipologias e o total consolidado. O objetivo é validar o cumprimento da restrição "
-        f"de pico máximo de {pico_maximo_limite} turmas simultâneas."
-    )
-
-    # Preparar dados para a tabela
-    if not serie_temporal_df.empty:
-        df_pico = serie_temporal_df[['Mês', 'Demanda PROG', 'Demanda ROB']].copy()
-        df_pico['Pico Consolidado'] = df_pico['Demanda PROG'] + df_pico['Demanda ROB']
-
-        # Cabeçalho da Tabela
-        pdf.set_font(pdf.font_family, 'B', 10)
-        pdf.set_fill_color(230, 230, 230)
-        pdf.cell(35, 8, 'Mês', border=1, align='C', fill=True)
-        pdf.cell(45, 8, 'Turmas PROG', border=1, align='C', fill=True)
-        pdf.cell(45, 8, 'Turmas ROB', border=1, align='C', fill=True)
-        pdf.cell(65, 8, 'Pico Consolidado (Total)', border=1, align='C', fill=True)
-        pdf.ln()
-
-        # Corpo da Tabela
-        pdf.set_font(pdf.font_family, '', 9)
-        max_pico_registrado = 0
-
-        for _, row in df_pico.iterrows():
-            total_mes = row['Pico Consolidado']
-            if total_mes > max_pico_registrado:
-                max_pico_registrado = total_mes
-
-            # Destacar linha se exceder o limite
-            if total_mes > pico_maximo_limite:
-                pdf.set_text_color(255, 0, 0)  # Vermelho
-                pdf.set_font(pdf.font_family, 'B', 9)
-            else:
-                pdf.set_text_color(0, 0, 0)  # Preto
-                pdf.set_font(pdf.font_family, '', 9)
-
-            pdf.cell(35, 7, str(row['Mês']), border=1, align='C')
-            pdf.cell(45, 7, str(row['Demanda PROG']), border=1, align='C')
-            pdf.cell(45, 7, str(row['Demanda ROB']), border=1, align='C')
-            pdf.cell(65, 7, str(total_mes), border=1, align='C')
-            pdf.ln()
-
-        # Resetar cor e fonte
-        pdf.set_text_color(0, 0, 0)
-        pdf.set_font(pdf.font_family, '', 10)
-        pdf.ln(5)
-
-        # Adicionar um resumo/conclusão da tabela
-        pdf.set_font(pdf.font_family, 'B', 10)
-        pdf.cell(0, 6, "Análise da Tabela:", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-        pdf.set_font(pdf.font_family, '', 10)
-
-        if max_pico_registrado > pico_maximo_limite:
-            pdf.multi_cell(0, 5,
-                           f"  {bullet} ATENÇÃO: O pico máximo registrado ({max_pico_registrado} turmas) "
-                           f"ultrapassou o limite de {pico_maximo_limite}. As linhas em vermelho indicam os meses problemáticos."
-                           )
-        else:
-            pdf.multi_cell(0, 5,
-                           f"  {bullet} SUCESSO: O pico máximo registrado ({max_pico_registrado} turmas) "
-                           f"respeitou o limite de {pico_maximo_limite} turmas por mês em todo o planejamento."
-                           )
+    if (df_evolucao_instrutores is not None
+            and not df_evolucao_instrutores.empty):
+        pico_idx              = df_evolucao_instrutores['Total'].idxmax()
+        pico_instrutores_real = int(
+            df_evolucao_instrutores.loc[pico_idx, 'Total']
+        )
+        mes_pico              = df_evolucao_instrutores.loc[pico_idx, 'Mes']
+        instrutores_prog_pico = int(
+            df_evolucao_instrutores.loc[pico_idx, 'Instrutores_PROG']
+        )
+        instrutores_rob_pico  = int(
+            df_evolucao_instrutores.loc[pico_idx, 'Instrutores_ROB']
+        )
     else:
-        pdf.chapter_body("Dados da série temporal não disponíveis para gerar a tabela de picos.")
+        pico_instrutores_real = sum(contagem_instrutores_hab.values())
+        for hab, count in contagem_instrutores_hab.items():
+            if hab == 'PROG':
+                instrutores_prog_pico = count
+            elif hab == 'ROBOTICA':
+                instrutores_rob_pico = count
+
+    # =========================================================================
+    # PRÉ-CÁLCULO: Ociosidade Mensal (v4.1)
+    # Derivado exclusivamente de fontes já disponíveis na assinatura
+    # =========================================================================
+    capacidade_max = resultados_estagio2.get(
+        'capacidade_max_instrutor',
+        # Fallback: inferir da contagem de instrutores e spread
+        8  # valor padrão do sistema
+    )
+
+    # Tentar obter capacidade_max_instrutor do resultado do stage 2
+    # Se não disponível no dict, usar o atributo dos instrutores
+    atribuicoes = resultados_estagio2.get('atribuicoes', [])
+    if atribuicoes:
+        capacidade_max = atribuicoes[0]['instrutor'].capacidade
+
+    df_ociosidade = _calcular_ociosidade_mensal(
+        df_evolucao_instrutores,
+        serie_temporal_df,
+        capacidade_max
+    )
+
+    # =========================================================================
+    # 1. RESUMO EXECUTIVO — INALTERADO
+    # =========================================================================
+    pdf.chapter_title("1. Resumo Executivo")
+    total_turmas = len(resultados_estagio2['turmas'])
+
+    texto_resumo = (
+        f"Este documento apresenta o planejamento otimizado para o "
+        f"periodo de {resultados_estagio1['periodo']}.\n\n"
+        f"- Total de Projetos: {len(projetos_config)}\n"
+        f"- Total de Turmas Alocadas: {total_turmas}\n"
+        f"- Quadro de Instrutores Necessario (Pico): "
+        f"{pico_instrutores_real}\n"
+        f"  (Pico em {mes_pico}: "
+        f"{instrutores_prog_pico} PROG + {instrutores_rob_pico} ROB)\n"
+        f"- Spread de Carga (Equilibrio): "
+        f"{resultados_estagio2['spread_carga']} "
+        f"(Max permitido: {resultados_estagio2['spread_max_permitido']})\n"
+        f"- Capacidade de turmas por instrutor: "
+        f"{capacidade_max} turmas/instrutor"
+    )
+    pdf.chapter_body(texto_resumo)
+
+    # =========================================================================
+    # 2. PROJETOS CONFIGURADOS — INALTERADO
+    # =========================================================================
+    pdf.chapter_title("2. Projetos Configurados")
+    for proj in projetos_config:
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(0, 5, f"- {proj.nome}", 0, 1)
+        pdf.set_font('Arial', '', 9)
+        pdf.cell(5)
+        pdf.cell(
+            0, 5,
+            f"Turmas: {proj.num_turmas} | "
+            f"Duracao: {proj.duracao_curso} meses | "
+            f"Ondas: {proj.ondas}",
+            0, 1
+        )
+        pdf.cell(5)
+        pdf.cell(
+            0, 5,
+            f"Periodo: {proj.data_inicio} a {proj.data_termino}",
+            0, 1
+        )
+        pdf.ln(2)
+    pdf.ln()
+
+    # =========================================================================
+    # 3. ANÁLISE DE DEMANDA E CRONOGRAMA — INALTERADO
+    # =========================================================================
+    pdf.add_page()
+    pdf.chapter_title("3. Analise de Demanda e Cronograma")
+    pdf.set_font('Arial', '', 10)
+
+    pico_turmas = 0
+    if not serie_temporal_df.empty:
+        pico_turmas = int(serie_temporal_df['Total'].max())
+
+    pdf.multi_cell(
+        0, 5,
+        f"O pico maximo de turmas simultaneas identificado foi de "
+        f"{pico_turmas} turmas "
+        f"(Limite configurado: {pico_maximo_limite})."
+    )
+    pdf.ln(2)
+
+    if graficos_paths.get('cronograma_consolidado'):
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(0, 8, "3.1. Cronograma de Execucao CONSOLIDADO", 0, 1)
+        pdf.add_image_centered(
+            graficos_paths['cronograma_consolidado'], width=180
+        )
 
     pdf.ln(5)
-
-    # ===========================
-    # 4. CONFIGURAÇÃO DOS PROJETOS (RENUMERADO)
-    # ===========================
-    pdf.chapter_title('4. Configuração dos Projetos Analisados')
-
+    pdf.set_font('Arial', 'B', 10)
+    pdf.cell(0, 8, "3.2. Detalhamento de Execucao por Projeto", 0, 1)
     for proj in projetos_config:
-        pdf.set_font(pdf.font_family, 'B', 10)
-        pdf.cell(0, 6, f"  {bullet} Projeto: {proj.nome}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        chave = f"cronograma_{proj.nome}"
+        if graficos_paths.get(chave):
+            pdf.set_font('Arial', 'I', 10)
+            pdf.cell(0, 8, f"- Projeto: {proj.nome}", 0, 1)
+            pdf.add_image_centered(graficos_paths[chave], width=160)
+            pdf.ln(2)
 
-        pdf.set_font(pdf.font_family, '', 10)
-
-        # Obter distribuição de instrutores para este projeto
-        distribuicao = distribuicao_por_projeto.get(proj.nome, {'PROG': 0, 'ROBOTICA': 0})
-        total_alocado = distribuicao['PROG'] + distribuicao['ROBOTICA']
-
-        # Montar texto consolidado
-        texto_projeto = (
-            f"    - Período: {proj.data_inicio} a {proj.data_termino}\n"
-            f"    - Turmas: {proj.num_turmas} | Duração: {proj.duracao_curso} meses | Ondas: {proj.ondas}\n"
-            f"    - Proporção Alvo: {proj.percentual_prog:.1f}% PROG / {proj.percentual_rob:.1f}% ROB"
-        )
-
-        if total_alocado > 0:
-            texto_projeto += (
-                f"\n    - Alocação Resultante: {distribuicao['PROG']} PROG / "
-                f"{distribuicao['ROBOTICA']} ROB ({total_alocado} no total)"
-            )
-
-        pdf.multi_cell(0, 5, texto_projeto)
-        pdf.ln(2)
-
-    # ===========================
-    # 5. ANÁLISE GRÁFICA (RENUMERADO)
-    # ===========================
-
-    # 5.1 Turmas por Projeto/Mês
-    if graficos_paths.get('projeto_mes'):
-        pdf.add_image_section(
-            "5.1. Distribuição de Turmas por Projeto ao Longo do Tempo",
-            graficos_paths['projeto_mes'],
-            "Este gráfico mostra como as turmas de cada projeto estão distribuídas ao longo dos meses, "
-            "permitindo identificar períodos de maior concentração e sobreposições."
-        )
-
-    # 5.2 Turmas por Instrutor/Projeto
-    if graficos_paths.get('instrutor_projeto'):
-        pdf.add_image_section(
-            "5.2. Distribuição de Turmas por Instrutor e Projeto",
-            graficos_paths['instrutor_projeto'],
-            "Visualização de como as turmas foram distribuídas entre os instrutores, "
-            "segmentadas por projeto."
-        )
-
-    # 5.3 Carga por Instrutor
-    if graficos_paths.get('carga_instrutor'):
-        pdf.add_image_section(
-            "5.3. Balanceamento de Carga entre Instrutores",
-            graficos_paths['carga_instrutor'],
-            "Análise da carga de trabalho atribuída a cada instrutor, "
-            "destacando o nível de balanceamento alcançado."
-        )
-
-    # 5.4 Demanda PROG/ROB
     if graficos_paths.get('prog_rob'):
-        pdf.add_image_section(
-            "5.4. Demanda Mensal por Habilidade",
-            graficos_paths['prog_rob'],
-            "Comparação da demanda mensal entre instrutores de Programação e Robótica, "
-            "com marcação dos períodos de férias."
+        pdf.add_page()
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(
+            0, 8,
+            "3.3. Curva de Demanda por Habilidade (PROG vs ROB)",
+            0, 1
         )
+        pdf.add_image_centered(graficos_paths['prog_rob'], width=180)
 
-    # 5.5 Conclusões por Mês
-    if graficos_paths.get('conclusoes'):
-        pdf.add_image_section(
-            "5.5. Cumprimento de Metas: Turmas Concluídas por Mês",
-            graficos_paths['conclusoes'],
-            "Este gráfico mostra a evolução do cumprimento de metas ao longo do tempo, "
-            "indicando quantas turmas são finalizadas em cada mês, separadas por projeto. "
-            "A visualização permite identificar períodos de alta conclusão e verificar se "
-            "os objetivos estão sendo atingidos conforme o planejamento."
+    if not serie_temporal_df.empty:
+        pdf.ln(5)
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(0, 8, "Tabela de Demanda Mensal Consolidada", 0, 1)
+        header = ['Mes', 'Demanda PROG', 'Demanda ROB', 'Total Turmas']
+        widths = [40, 40, 40, 40]
+        data = []
+        for _, row in serie_temporal_df.iterrows():
+            data.append([
+                row['Mes'],
+                int(row['Demanda_PROG']),
+                int(row['Demanda_ROB']),
+                int(row['Total'])
+            ])
+        pdf.create_table(header, data, widths)
+
+    # =========================================================================
+    # 4. DIMENSIONAMENTO DA EQUIPE — INALTERADO
+    # =========================================================================
+    pdf.add_page()
+    pdf.chapter_title("4. Dimensionamento da Equipe")
+    pdf.chapter_body(
+        "Distribuicao do quadro de instrutores por habilidade:"
+    )
+
+    pdf.set_font('Arial', '', 9)
+    for hab, count in contagem_instrutores_hab.items():
+        pdf.cell(10)
+        pdf.cell(0, 5, f"- {hab}: {count} instrutores", 0, 1)
+    pdf.ln(2)
+
+    if graficos_paths.get('carga_instrutor'):
+        pdf.add_image_centered(
+            graficos_paths['carga_instrutor'], width=150
         )
-
-    # ===========================
-    # 6. APÊNDICES (RENUMERADO)
-    # ===========================
-    # <<< NOTA: A tabela de série temporal agora é mostrada na seção 3,
-    # então podemos removê-la daqui para evitar duplicidade. >>>
 
     if not df_consolidada_instrutor.empty:
-        pdf.add_table_from_dataframe(
-            df_consolidada_instrutor,
-            title="Apêndice A: Tabela Consolidada - Instrutor x Projeto",
-            max_rows=30
+        pdf.ln(5)
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(0, 8, "Relacao de Instrutores Alocados", 0, 1)
+        header = ['ID', 'Habilidade', 'Total Turmas', 'Projetos Atendidos']
+        widths = [30, 30, 30, 100]
+        data = []
+        for _, row in df_consolidada_instrutor.iterrows():
+            data.append([
+                row['Instrutor_ID'],
+                row['Habilidade'],
+                row['Total_Turmas'],
+                row['Projetos']
+            ])
+        pdf.create_table(header, data, widths)
+
+    # =========================================================================
+    # 5. PREVISÃO DE CONCLUSÕES — INALTERADO
+    # =========================================================================
+    pdf.add_page()
+    pdf.chapter_title("5. Previsao de Conclusoes")
+    pdf.chapter_body(
+        "Volume de turmas encerrando suas atividades mes a mes."
+    )
+    if graficos_paths.get('conclusoes'):
+        pdf.add_image_centered(graficos_paths['conclusoes'], width=180)
+
+    # =========================================================================
+    # 6. EVOLUÇÃO MENSAL DA EQUIPE — INALTERADO
+    # =========================================================================
+    if (df_evolucao_instrutores is not None
+            and not df_evolucao_instrutores.empty):
+        pdf.add_page()
+        pdf.chapter_title("6. Evolucao Mensal da Equipe")
+        pdf.chapter_body(
+            "Analise da quantidade de instrutores ativos por mes, "
+            "segregados por tipologia."
         )
 
-    # ===========================
-    # SALVAR PDF
-    # ===========================
-    caminho_saida = "Relatorio_Otimizacao_Completo.pdf"
+        if graficos_paths.get('evolucao_instrutores'):
+            pdf.add_image_centered(
+                graficos_paths['evolucao_instrutores'], width=180
+            )
 
-    try:
-        pdf.output(caminho_saida)
-        print(f"\n✓ Relatório PDF gerado com sucesso: {caminho_saida}")
-    except Exception as e:
-        print(f"\n✗ Erro ao salvar PDF: {e}")
-        raise
+        pdf.ln(5)
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(0, 8, "Tabela de Instrutores Ativos por Mes", 0, 1)
+        header = ['Mes', 'Instrutores PROG', 'Instrutores ROB', 'Total']
+        widths = [40, 45, 45, 30]
+        data = []
+        for _, row in df_evolucao_instrutores.iterrows():
+            data.append([
+                row['Mes'],
+                int(row['Instrutores_PROG']),
+                int(row['Instrutores_ROB']),
+                int(row['Total'])
+            ])
+        pdf.create_table(header, data, widths)
 
-    return caminho_saida
+    # =========================================================================
+    # 7. OCIOSIDADE MENSAL — NOVO v4.1
+    #
+    # Indicador global (não por projeto).
+    # Ociosidade = razão entre capacidade ociosa e capacidade total.
+    #
+    # Coluna "Ociosidade Abs": turmas que poderiam ser absorvidas
+    #   mas não estão sendo utilizadas naquele mês.
+    # Coluna "Ociosidade (%)": percentual da capacidade ociosa.
+    #
+    # Fórmula:
+    #   capacidade_total[m] = instrutores_ativos[m] × cap_max_instrutor
+    #   ociosidade_abs[m]   = capacidade_total[m] - turmas_ativas[m]
+    #   ociosidade_pct[m]   = ociosidade_abs[m] / capacidade_total[m]
+    # =========================================================================
+    pdf.add_page()
+    pdf.chapter_title("7. Ociosidade Mensal")
+    pdf.chapter_body(
+        "Analise global da ociosidade da equipe de instrutores mes a mes.\n"
+        "A ociosidade e definida como a razao entre a capacidade nao "
+        "utilizada e a capacidade total disponivel no mes.\n\n"
+        f"Capacidade por instrutor: {capacidade_max} turmas/mes\n"
+        "Capacidade Total (mes) = Instrutores Ativos x Capacidade Max\n"
+        "Ociosidade Abs = Capacidade Total - Turmas Ativas\n"
+        "Ociosidade (%) = Ociosidade Abs / Capacidade Total x 100"
+    )
 
+    if not df_ociosidade.empty:
+        # ── Indicadores de síntese ────────────────────────────────────────────
+        ocio_media  = df_ociosidade['Ociosidade_Pct'].mean()
+        ocio_max    = df_ociosidade['Ociosidade_Pct'].max()
+        mes_ocio_max = df_ociosidade.loc[
+            df_ociosidade['Ociosidade_Pct'].idxmax(), 'Mes'
+        ]
+        ocio_min    = df_ociosidade['Ociosidade_Pct'].min()
+        mes_ocio_min = df_ociosidade.loc[
+            df_ociosidade['Ociosidade_Pct'].idxmin(), 'Mes'
+        ]
+
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(0, 8, "Sintese de Ociosidade:", 0, 1)
+        pdf.set_font('Arial', '', 9)
+        pdf.cell(10)
+        pdf.cell(
+            0, 5,
+            f"- Media mensal:  {ocio_media:.1f}%",
+            0, 1
+        )
+        pdf.cell(10)
+        pdf.cell(
+            0, 5,
+            f"- Maior ociosidade: {ocio_max:.1f}% em {mes_ocio_max}",
+            0, 1
+        )
+        pdf.cell(10)
+        pdf.cell(
+            0, 5,
+            f"- Menor ociosidade: {ocio_min:.1f}% em {mes_ocio_min}",
+            0, 1
+        )
+        pdf.ln(5)
+
+        # ── Tabela detalhada mês a mês ────────────────────────────────────────
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(0, 8, "Detalhamento Mensal:", 0, 1)
+
+        header = [
+            'Mes',
+            'Inst. Ativos',
+            'Cap. Total',
+            'Turmas Ativas',
+            'Ociosidade Abs',
+            'Ociosidade (%)'
+        ]
+        widths = [28, 28, 28, 35, 38, 33]
+        data = []
+        for _, row in df_ociosidade.iterrows():
+            data.append([
+                row['Mes'],
+                int(row['Instrutores_Ativos']),
+                int(row['Capacidade_Total']),
+                int(row['Turmas_Ativas']),
+                int(row['Ociosidade_Abs']),
+                f"{row['Ociosidade_Pct']:.1f}%"
+            ])
+        pdf.create_table(header, data, widths)
+
+    else:
+        pdf.chapter_body(
+            "Dados insuficientes para calcular ociosidade mensal.\n"
+            "Verifique se df_evolucao_instrutores e "
+            "serie_temporal_df estao disponiveis."
+        )
+
+    # =========================================================================
+    # 8. ANÁLISE FINANCEIRA E FLUXO DE CAIXA — era seção 7, inalterada
+    # =========================================================================
+    if parametros_financeiros:
+        pdf.add_page()
+        pdf.chapter_title("8. Analise Financeira e Fluxo de Caixa")
+
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(0, 8, "Premissas de Custos Configuradas:", 0, 1)
+        pdf.set_font('Arial', '', 9)
+        for item in parametros_financeiros.itens_custo:
+            escopo = (
+                f"[{item.projeto}]" if item.projeto else "[GLOBAL]"
+            )
+            pdf.cell(5)
+            pdf.cell(
+                0, 5,
+                f"- {escopo} {item.tipo} - {item.descricao}: "
+                f"R$ {item.valor:,.2f}",
+                0, 1
+            )
+        pdf.ln(5)
+
+        # 8.1 Detalhamento por Projeto
+        pdf.set_font('Arial', 'B', 12)
+        pdf.cell(0, 10, "8.1. Detalhamento por Projeto", 0, 1)
+
+        meses = (
+            serie_temporal_df['Mes'].tolist()
+            if not serie_temporal_df.empty else []
+        )
+
+        for proj in projetos_config:
+            df_proj = calcular_fluxo_caixa_detalhado(
+                resultados_estagio2['atribuicoes'],
+                meses,
+                resultados_estagio1.get('meses_recesso', []),
+                resultados_estagio1.get('meses_ferias_escolares', []),
+                parametros_financeiros,
+                projeto_filtro=proj.nome
+            )
+
+            if (not df_proj.empty
+                    and df_proj['Custo Mensal'].sum() > 0):
+                if pdf.get_y() > 220:
+                    pdf.add_page()
+
+                pdf.set_font('Arial', 'B', 11)
+                pdf.set_fill_color(245, 245, 245)
+                pdf.cell(
+                    0, 8, f"Projeto: {proj.nome}", 1, 1, 'L', 1
+                )
+
+                chave_grafico = f"financeiro_{proj.nome}"
+                if graficos_paths.get(chave_grafico):
+                    pdf.add_image_centered(
+                        graficos_paths[chave_grafico], width=160
+                    )
+
+                pdf.ln(2)
+                data = [
+                    [
+                        r['Mês'],
+                        f"R$ {r['Custo Mensal']:,.2f}",
+                        f"R$ {r['Custo Acumulado']:,.2f}"
+                    ]
+                    for _, r in df_proj.iterrows()
+                ]
+                pdf.create_table(
+                    ['Mes', 'Custo Mensal', 'Acumulado'],
+                    data, [50, 60, 60]
+                )
+                pdf.ln(5)
+
+        # 8.2 Fluxo de Caixa Consolidado
+        pdf.add_page()
+        pdf.chapter_title("8.2. Fluxo de Caixa CONSOLIDADO")
+        pdf.chapter_body(
+            "Visao total incluindo custos diretos dos projetos "
+            "e custos globais/permanentes."
+        )
+
+        if graficos_paths.get('financeiro_consolidado'):
+            pdf.add_image_centered(
+                graficos_paths['financeiro_consolidado'], width=180
+            )
+
+        df_fin = calcular_fluxo_caixa_detalhado(
+            resultados_estagio2['atribuicoes'],
+            meses,
+            resultados_estagio1.get('meses_recesso', []),
+            resultados_estagio1.get('meses_ferias_escolares', []),
+            parametros_financeiros
+        )
+
+        if not df_fin.empty:
+            pdf.ln(5)
+            data = [
+                [
+                    r['Mês'],
+                    f"R$ {r['Custo Mensal']:,.2f}",
+                    f"R$ {r['Custo Acumulado']:,.2f}"
+                ]
+                for _, r in df_fin.iterrows()
+            ]
+            pdf.create_table(
+                ['Mes', 'Custo Mensal', 'Acumulado'],
+                data, [50, 60, 60]
+            )
+
+    # =========================================================================
+    # GERAR PDF — timestamp no nome (v4.0)
+    # =========================================================================
+    timestamp    = datetime.now().strftime("%y%m%d_%H%M%S")
+    nome_arquivo = (
+        f"resultados_otimizacao/"
+        f"Relatorio_Otimizacao_Completo_{timestamp}.pdf"
+    )
+
+    pdf.output(nome_arquivo)
+
+    print(f"  ✓ Relatório PDF gerado: {nome_arquivo}")
+    print(
+        f"    [v3.9] Pico de instrutores: {pico_instrutores_real} "
+        f"(máximo simultâneo em {mes_pico})"
+    )
+    if not df_ociosidade.empty:
+        print(
+            f"    [v4.1] Ociosidade média: "
+            f"{df_ociosidade['Ociosidade_Pct'].mean():.1f}%"
+        )
+
+    return nome_arquivo

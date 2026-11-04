@@ -1,54 +1,50 @@
-# ARQUIVO: otimizador/reporting/spreadsheets.py
-
-from collections import defaultdict
-from typing import List, Dict
 import pandas as pd
-
-# Import relativo
-from ..data_models import Turma, Instrutor
-from ..utils import calcular_meses_ativos
-
-
-def gerar_planilha_detalhada(atribuicoes: List[Dict], meses: List[str], meses_ferias: List[int]) -> pd.DataFrame:
-    """Gera planilha detalhada com a carga horária."""
-    print("\n--- Gerando Planilha Detalhada ---")
-    if not atribuicoes: return pd.DataFrame()
-
-    carga_data = []
-    num_meses = len(meses)
-    for atr in atribuicoes:
-        turma, instrutor = atr['turma'], atr['instrutor']
-        for mes_idx in calcular_meses_ativos(turma.mes_inicio, turma.duracao, meses_ferias, num_meses):
-            carga_data.append({
-                "Instrutor": instrutor.id, "Mes": meses[mes_idx], "Habilidade": instrutor.habilidade,
-                "Projeto": turma.projeto, "Turma_ID": turma.id, "Carga": 1
-            })
-
-    if not carga_data: return pd.DataFrame()
-    df = pd.DataFrame(carga_data).sort_values(by=["Instrutor", "Mes"])
-    df.to_excel('1_carga_horaria_detalhada.xlsx', index=False, engine='openpyxl')
-    print("Planilha salva: '1_carga_horaria_detalhada.xlsx'")
-    return df
+from typing import List, Dict
+from ..utils import calcular_fluxo_caixa_detalhado
+from ..data_models import ParametrosFinanceiros
 
 
 def gerar_planilha_consolidada_instrutor(atribuicoes: List[Dict]) -> pd.DataFrame:
-    """Gera planilha consolidada por instrutor e projeto."""
-    print("\n--- Gerando Planilha Consolidada por Instrutor ---")
-    if not atribuicoes: return pd.DataFrame()
-
-    dados = defaultdict(lambda: defaultdict(int))
-    projetos_unicos = sorted(list(set(atr['turma'].projeto for atr in atribuicoes)))
-
+    dados = []
     for atr in atribuicoes:
-        dados[atr['instrutor'].id][atr['turma'].projeto] += 1
+        i, t = atr['instrutor'], atr['turma']
+        dados.append({'Instrutor_ID': i.id, 'Habilidade': i.habilidade, 'Turma_ID': t.id, 'Projeto': t.projeto})
 
-    rows = []
-    for instrutor_id, proj_dict in sorted(dados.items()):
-        row = {'Instrutor': instrutor_id, **{proj: proj_dict.get(proj, 0) for proj in projetos_unicos}}
-        row['Total'] = sum(proj_dict.values())
-        rows.append(row)
+    df = pd.DataFrame(dados)
+    if df.empty: return pd.DataFrame(columns=['Instrutor_ID'])
 
-    df = pd.DataFrame(rows)
-    df.to_excel('2_consolidado_instrutor_projeto.xlsx', index=False, engine='openpyxl')
-    print("Planilha salva: '2_consolidado_instrutor_projeto.xlsx'")
-    return df
+    resumo = df.groupby('Instrutor_ID').agg(
+        Total_Turmas=('Turma_ID', 'count'),
+        Projetos=('Projeto', lambda x: ', '.join(sorted(set(x)))),
+        Habilidade=('Habilidade', 'first')
+    ).reset_index()
+    return resumo.sort_values(['Habilidade', 'Instrutor_ID'])
+
+
+def gerar_planilha_detalhada(atribuicoes: List[Dict], meses: List[str],
+                             meses_recesso_idx: List[int], meses_ferias_escolares_idx: List[int],
+                             parametros_financeiros: ParametrosFinanceiros = None):
+    # Aba 1: Detalhada
+    dados = [{'Instrutor': a['instrutor'].id, 'Turma': a['turma'].id, 'Inicio': meses[a['turma'].mes_inicio]} for a in
+             atribuicoes]
+    df_detalhado = pd.DataFrame(dados)
+
+    # Aba 2: Fluxo de Caixa (Usando a nova lógica centralizada)
+    df_financeiro = pd.DataFrame()
+    if parametros_financeiros:
+        df_financeiro = calcular_fluxo_caixa_detalhado(
+            atribuicoes, meses, meses_recesso_idx, meses_ferias_escolares_idx, parametros_financeiros
+        )
+
+    try:
+        with pd.ExcelWriter('resultados_otimizacao/Detalhamento_Completo.xlsx', engine='openpyxl') as writer:
+            df_detalhado.to_excel(writer, sheet_name='Alocacoes', index=False)
+            if not df_financeiro.empty:
+                df_financeiro.to_excel(writer, sheet_name='Fluxo de Caixa', index=False)
+                # Formatação simples
+                ws = writer.sheets['Fluxo de Caixa']
+                for row in ws.iter_rows(min_row=2, min_col=2, max_col=3):
+                    for cell in row: cell.number_format = '#,##0.00'
+        print("  ✓ Planilha Excel gerada.")
+    except Exception as e:
+        print(f"  [ERRO] Excel: {e}")

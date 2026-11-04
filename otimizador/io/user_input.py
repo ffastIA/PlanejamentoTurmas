@@ -1,14 +1,12 @@
-# ARQUIVO: otimizador/io/user_input.py
-
 import sys
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
-# Import relativo para acessar os modelos de dados do mesmo pacote
-from ..data_models import ParametrosOtimizacao, ConfiguracaoProjeto
+# Import relativo
+from ..data_models import ParametrosOtimizacao, ConfiguracaoProjeto, ParametrosFinanceiros, ItemCusto
 
 
-def obter_parametros_usuario() -> ParametrosOtimizacao:
+def obter_parametros_usuario(meses: Optional[List[str]] = None) -> ParametrosOtimizacao:
     """Solicita parâmetros de otimização ao usuário via CLI."""
     print("\n" + "=" * 80)
     print("CONFIGURAÇÃO DE PARÂMETROS GLOBAIS DE OTIMIZAÇÃO")
@@ -18,34 +16,31 @@ def obter_parametros_usuario() -> ParametrosOtimizacao:
     print("(Digite 'sair' para cancelar)\n")
 
     try:
-        capacidade_max = _obter_int_usuario(
-            prompt="Capacidade máxima de turmas por instrutor/mês [padrão: 8]: ",
-            valor_padrao=8, minimo=1, maximo=20, nome_parametro="Capacidade"
+        capacidade_max = _obter_int_usuario("Capacidade máxima de turmas por instrutor/mês [padrão: 6]: ", 6, 1, 20,
+                                            "Capacidade")
+        spread_maximo = _obter_int_usuario("Spread máximo permitido entre instrutores [padrão: 4]: ", 4, 0, 50,
+                                           "Spread Máximo")
+
+        timeout = _obter_int_usuario("Timeout do solver em segundos [padrão: 180]: ", 180, 10, 3600, "Timeout")
+        peso_instrutores = _obter_int_usuario("Peso minimização instrutores [padrão: 10000]: ", 10000, 1, 100000,
+                                              "Peso Instrutores")
+        peso_spread = _obter_int_usuario("Peso spread de carga [padrão: 1]: ", 1, 0, 10000, "Peso Spread")
+        pico_maximo = _obter_int_usuario("Pico máximo de turmas simultâneas [padrão: 100]: ", 100, 1, 500,
+                                         "Pico Máximo")
+        peso_monotonia = _obter_int_usuario(
+            "Peso monotonia da demanda — penaliza quedas no Stage 1 [padrão: 500]: ",
+            500, 0, 100000, "Peso Monotonia"
         )
-        spread_maximo = _obter_int_usuario(
-            prompt="Spread máximo permitido entre instrutores [padrão: 16]: ",
-            valor_padrao=16, minimo=0, maximo=50, nome_parametro="Spread Máximo"
-        )
-        timeout = _obter_int_usuario(
-            prompt="Timeout do solver em segundos [padrão: 180]: ",
-            valor_padrao=180, minimo=10, maximo=3600, nome_parametro="Timeout"
+        peso_spread_mensal = _obter_int_usuario(
+            "Peso spread mensal por instrutor — uniformidade intra-período Stage 2 [padrão: 100]: ",
+            100, 0, 100000, "Peso Spread Mensal"
         )
 
-        peso_instrutores = _obter_int_usuario(
-            prompt="Peso minimização instrutores [padrão: 10000]: ",
-            valor_padrao=10000, minimo=1, maximo=100000, nome_parametro="Peso Instrutores"
-        )
-
-        peso_spread = _obter_int_usuario(
-            prompt="Peso spread de carga [padrão: 1]: ",
-            valor_padrao=1, minimo=0, maximo=10000, nome_parametro="Peso Spread"
-        )
-
-        # <<< ALTERAÇÃO: Valor padrão corrigido para 100 >>>
-        pico_maximo = _obter_int_usuario(
-            prompt="Pico máximo de turmas simultâneas [padrão: 100]: ",
-            valor_padrao=100, minimo=1, maximo=500, nome_parametro="Pico Máximo"
-        )
+        if meses:
+            meses_recesso, meses_ferias = _obter_meses_restricao(meses)
+        else:
+            print("\n[AVISO] Período do projeto não disponível — meses de restrição não configurados.")
+            meses_recesso, meses_ferias = [], []
 
         parametros = ParametrosOtimizacao(
             capacidade_max_instrutor=capacidade_max,
@@ -53,7 +48,11 @@ def obter_parametros_usuario() -> ParametrosOtimizacao:
             timeout_segundos=timeout,
             peso_instrutores=peso_instrutores,
             peso_spread=peso_spread,
-            pico_maximo_turmas=pico_maximo
+            pico_maximo_turmas=pico_maximo,
+            peso_monotonia=peso_monotonia,
+            peso_spread_mensal=peso_spread_mensal,
+            meses_recesso=meses_recesso,
+            meses_ferias_escolares=meses_ferias,
         )
         exibir_resumo_parametros(parametros)
         return parametros
@@ -63,6 +62,84 @@ def obter_parametros_usuario() -> ParametrosOtimizacao:
     except Exception as e:
         print(f"\n[ERRO] Falha ao obter parâmetros: {e}")
         sys.exit(1)
+
+
+def obter_parametros_financeiros(projetos_disponiveis: List[ConfiguracaoProjeto]) -> ParametrosFinanceiros:
+    """Solicita múltiplos custos ao usuário via CLI, permitindo alocação por projeto."""
+    print("\n" + "=" * 80)
+    print("CONFIGURAÇÃO DO MÓDULO FINANCEIRO")
+    print("=" * 80)
+    print("Defina os custos. Você pode definir custos GLOBAIS ou ESPECÍFICOS por projeto.\n")
+
+    params_fin = ParametrosFinanceiros()
+
+    tipos_map = {
+        '1': 'INICIAL',
+        '2': 'ENCERRAMENTO',
+        '3': 'EXECUCAO',
+        '4': 'PERMANENTE',
+        '5': 'INSTRUTOR'  # NOVO TIPO
+    }
+
+    while True:
+        print("\n--- Adicionar Novo Custo ---")
+        print("Tipos disponíveis:")
+        print("  [1] INICIAL      (Início da turma)")
+        print("  [2] ENCERRAMENTO (Final da turma)")
+        print("  [3] EXECUÇÃO     (Mensal durante a turma - ex: material)")
+        print("  [4] PERMANENTE   (Mensal durante todo o projeto - ex: gestão)")
+        print("  [5] INSTRUTOR    (Mensal x Qtd Instrutores Ativos)")  # NOVO
+        print("  [S] Sair / Concluir")
+
+        escolha = input("\nEscolha o tipo [1-5] ou S para concluir: ").strip().upper()
+
+        if escolha == 'S':
+            break
+
+        if escolha not in tipos_map:
+            print("[!] Opção inválida.")
+            continue
+
+        tipo_selecionado = tipos_map[escolha]
+
+        # Seleção de Escopo (Global ou Projeto)
+        projeto_selecionado = None
+        print("\nEscopo do Custo:")
+        print("  [G] GLOBAL (Aplica a todos os projetos/turmas)")
+        if projetos_disponiveis:
+            for idx, p in enumerate(projetos_disponiveis, 1):
+                print(f"  [{idx}] Projeto: {p.nome}")
+
+        escopo = input("Escolha o escopo [G ou número do projeto]: ").strip().upper()
+
+        if escopo != 'G':
+            try:
+                idx_proj = int(escopo) - 1
+                if 0 <= idx_proj < len(projetos_disponiveis):
+                    projeto_selecionado = projetos_disponiveis[idx_proj].nome
+                    print(f"   -> Selecionado: {projeto_selecionado}")
+                else:
+                    print("[!] Projeto inválido. Definindo como GLOBAL.")
+            except ValueError:
+                print("[!] Opção inválida. Definindo como GLOBAL.")
+        else:
+            print("   -> Selecionado: GLOBAL")
+
+        label_valor = "Valor Mensal por Instrutor (R$): " if tipo_selecionado == 'INSTRUTOR' else "Valor do custo (R$): "
+        descricao = input(f"Descrição do custo (ex: 'Salário Base', 'Ajuda de Custo'): ").strip()
+        if not descricao:
+            print("[!] Descrição obrigatória.")
+            continue
+
+        valor = _obter_float_usuario(label_valor, None, 0.0, 1000000.0, "Valor")
+
+        params_fin.adicionar_custo(tipo_selecionado, descricao, valor, projeto_selecionado)
+
+        escopo_str = f"PROJETO {projeto_selecionado}" if projeto_selecionado else "GLOBAL"
+        print(f"[✓] Adicionado: [{escopo_str}] {tipo_selecionado} - {descricao} - R$ {valor:.2f}")
+
+    print(f"\n[✓] Configuração financeira concluída. Total de itens: {len(params_fin.itens_custo)}")
+    return params_fin
 
 
 def obter_projetos_usuario() -> List[ConfiguracaoProjeto]:
@@ -86,7 +163,6 @@ def obter_projetos_usuario() -> List[ConfiguracaoProjeto]:
             return projetos
         elif escolha == '2':
             projetos = _obter_projetos_customizados()
-            # O resumo já é exibido dentro de _obter_projetos_customizados se concluído
             return projetos
         else:
             print("[!] Opção inválida. Digite 1, 2 ou S.")
@@ -119,7 +195,6 @@ def _obter_projetos_customizados() -> List[ConfiguracaoProjeto]:
             novo_projeto = _configurar_projeto_interativo()
             if novo_projeto:
                 projetos.append(novo_projeto)
-                print(f"\n[✓] Projeto '{novo_projeto.nome}' adicionado com sucesso!")
         elif opcao == 'E' and projetos:
             projetos = _editar_projeto_interativo(projetos)
         elif opcao == 'R' and projetos:
@@ -133,7 +208,7 @@ def _obter_projetos_customizados() -> List[ConfiguracaoProjeto]:
 
 def _configurar_projeto_interativo(projeto_existente: Optional[ConfiguracaoProjeto] = None) -> Optional[
     ConfiguracaoProjeto]:
-    """Configura um projeto interativamente, ou edita um existente."""
+    """Configura um projeto interativamente."""
     is_editing = projeto_existente is not None
     title = "EDITAR PROJETO" if is_editing else "ADICIONAR NOVO PROJETO"
     print("\n" + "=" * 70 + f"\n{title}\n" + "=" * 70)
@@ -142,10 +217,7 @@ def _configurar_projeto_interativo(projeto_existente: Optional[ConfiguracaoProje
     try:
         nome_prompt = f"Nome do projeto [{projeto_existente.nome if is_editing else ''}]: "
         nome = input(nome_prompt).strip() or (projeto_existente.nome if is_editing else '')
-        if not nome:
-            print("[!] Nome não pode ser vazio.")
-            # Permite ao usuário tentar novamente sem sair da função
-            return _configurar_projeto_interativo(projeto_existente)
+        if not nome: return _configurar_projeto_interativo(projeto_existente)
 
         data_inicio_str = input(
             f"Data início (DD/MM/YYYY) [{projeto_existente.data_inicio if is_editing else ''}]: ").strip() or (
@@ -161,17 +233,37 @@ def _configurar_projeto_interativo(projeto_existente: Optional[ConfiguracaoProje
             projeto_existente.duracao_curso if is_editing else None, 1, 12, "Duração")
         ondas = _obter_int_usuario(f"Número de ondas [{projeto_existente.ondas if is_editing else ''}]: ",
                                    projeto_existente.ondas if is_editing else 1, 1, 10, "Ondas")
-
         perc_prog = _obter_float_usuario(
             f"Percentual PROG (%) [{projeto_existente.percentual_prog if is_editing else 60}]: ",
             projeto_existente.percentual_prog if is_editing else 60.0, 0.0, 100.0, "Percentual PROG")
 
-        projeto = ConfiguracaoProjeto(
-            nome=nome, data_inicio=data_inicio_str, data_termino=data_termino_str,
-            num_turmas=num_turmas, duracao_curso=duracao_curso, ondas=ondas, percentual_prog=perc_prog
+        min_turmas = _obter_int_usuario(
+            f"Mínimo de turmas ativas/mês (exceto férias) [{projeto_existente.turmas_min_por_mes if is_editing else 1}]: ",
+            projeto_existente.turmas_min_por_mes if is_editing else 1, 0, 100, "Mínimo Turmas")
+
+        default_permite_ferias = (
+            projeto_existente.permite_ferias_escolares if is_editing else False
         )
-        print(
-            f"\nRESUMO DO PROJETO:\n  Nome: {projeto.nome}\n  Período: {projeto.data_inicio} a {projeto.data_termino}\n  Turmas: {projeto.num_turmas}\n  Duração: {projeto.duracao_curso} meses\n  Ondas: {projeto.ondas}\n  Proporção: {projeto.percentual_prog:.1f}% PROG / {projeto.percentual_rob:.1f}% ROB")
+        permite_ferias_str = input(
+            f"Permite execução durante férias ESCOLARES "
+            f"(oficina / espaço tecnológico — não durante recesso institucional)? (S/N) "
+            f"[{'S' if default_permite_ferias else 'N'}]: "
+        ).strip().upper()
+        permite_ferias_escolares = (
+            permite_ferias_str == 'S' if permite_ferias_str else default_permite_ferias
+        )
+
+        projeto = ConfiguracaoProjeto(
+            nome=nome,
+            data_inicio=data_inicio_str,
+            data_termino=data_termino_str,
+            num_turmas=num_turmas,
+            duracao_curso=duracao_curso,
+            ondas=ondas,
+            percentual_prog=perc_prog,
+            turmas_min_por_mes=min_turmas,
+            permite_ferias_escolares=permite_ferias_escolares
+        )
         confirma = input("\nConfirmar? (S/N) [S]: ").strip().upper()
         return projeto if confirma in ('', 'S') else None
     except (KeyboardInterrupt, TypeError, ValueError) as e:
@@ -180,179 +272,141 @@ def _configurar_projeto_interativo(projeto_existente: Optional[ConfiguracaoProje
 
 
 def _editar_projeto_interativo(projetos: List[ConfiguracaoProjeto]) -> List[ConfiguracaoProjeto]:
-    """Interface para selecionar e editar um projeto."""
-    for idx, proj in enumerate(projetos, 1):
-        print(f"  {idx}. {proj.nome}")
+    for idx, proj in enumerate(projetos, 1): print(f"  {idx}. {proj.nome}")
     escolha = input(f"\nNúmero do projeto a editar [1-{len(projetos)}] ou 'C' para cancelar: ").strip()
-    if escolha.upper() == 'C':
-        return projetos
+    if escolha.upper() == 'C': return projetos
     try:
         idx = int(escolha) - 1
-        if not (0 <= idx < len(projetos)):
-            print("[!] Número inválido.")
-            return projetos
-
-        print(f"\nEditando o projeto '{projetos[idx].nome}'...")
-        projeto_editado = _configurar_projeto_interativo(projetos[idx])
-        if projeto_editado:
-            projetos[idx] = projeto_editado
-            print(f"\n[✓] Projeto '{projeto_editado.nome}' atualizado.")
-        else:
-            print("\nEdição cancelada.")
-
+        if 0 <= idx < len(projetos): projetos[idx] = _configurar_projeto_interativo(projetos[idx]) or projetos[idx]
     except ValueError:
-        print("[!] Digite um número válido.")
+        pass
     return projetos
 
 
 def _remover_projeto_interativo(projetos: List[ConfiguracaoProjeto]) -> List[ConfiguracaoProjeto]:
-    """Interface para selecionar e remover um projeto."""
-    print("\n" + "-" * 80)
-    print("REMOVER PROJETO")
-    for idx, proj in enumerate(projetos, 1):
-        print(f"  {idx}. {proj.nome}")
-
+    for idx, proj in enumerate(projetos, 1): print(f"  {idx}. {proj.nome}")
     escolha = input(f"\nNúmero do projeto a remover [1-{len(projetos)}] ou 'C' para cancelar: ").strip()
-    if escolha.upper() == 'C':
-        return projetos
-
+    if escolha.upper() == 'C': return projetos
     try:
         idx = int(escolha) - 1
-        if not (0 <= idx < len(projetos)):
-            print("[!] Número inválido.")
-            return projetos
-
-        nome_removido = projetos[idx].nome
-        confirma = input(f"Tem certeza que deseja remover o projeto '{nome_removido}'? (S/N) [N]: ").strip().upper()
-        if confirma == 'S':
-            projetos.pop(idx)
-            print(f"\n[✓] Projeto '{nome_removido}' removido com sucesso!")
-        else:
-            print("\nOperação de remoção cancelada.")
-
+        if 0 <= idx < len(projetos):
+            if input(f"Remover '{projetos[idx].nome}'? (S/N) [N]: ").strip().upper() == 'S': projetos.pop(idx)
     except ValueError:
-        print("[!] Digite um número válido.")
-
+        pass
     return projetos
 
 
 def _confirmar_configuracao(projetos: List[ConfiguracaoProjeto]) -> bool:
-    """Exibe o resumo final e pede confirmação para continuar."""
     exibir_resumo_projetos(projetos)
-    confirma = input("\nConfirmar e continuar com esta configuração? (S/N) [S]: ").strip().upper()
-    return confirma in ('', 'S')
+    return input("\nConfirmar? (S/N) [S]: ").strip().upper() in ('', 'S')
 
 
 def _obter_projetos_padrao() -> List[ConfiguracaoProjeto]:
-    """Retorna a configuração padrão dos projetos para demonstração."""
-    try:
-        # A configuração padrão dos projetos que você forneceu.
-        return [
-            ConfiguracaoProjeto(nome='DD1', data_inicio='15/01/2026', data_termino='31/03/2026', num_turmas=8,
-                                duracao_curso=2, ondas=1, percentual_prog=100.0),
-            ConfiguracaoProjeto(nome='DD2', data_inicio='01/04/2026', data_termino='31/03/2027', num_turmas=110,
-                                duracao_curso=4, ondas=2, percentual_prog=60.0),
-            ConfiguracaoProjeto(nome='IdearTec', data_inicio='01/04/2026', data_termino='31/03/2027', num_turmas=110,
-                                duracao_curso=4, ondas=2, percentual_prog=50.0)
-        ]
-    except ValueError as e:
-        print(f"[ERRO CRÍTICO] A configuração padrão dos projetos é inválida: {e}")
-        print("Por favor, corrija o código-fonte em _obter_projetos_padrao().")
-        sys.exit(1)
+    return [
+        ConfiguracaoProjeto('DD1', '15/01/2026', '31/03/2026', 8, 2, 1, 100.0, turmas_min_por_mes=1),
+        ConfiguracaoProjeto('DD2', '01/04/2026', '31/03/2027', 110, 4, 2, 60.0, turmas_min_por_mes=1),
+        ConfiguracaoProjeto('IdearTec', '01/04/2026', '31/03/2027', 110, 4, 2, 50.0, turmas_min_por_mes=1)
+    ]
 
 
 def _obter_int_usuario(prompt: str, valor_padrao: Optional[int], minimo: int, maximo: int, nome_parametro: str) -> \
 Optional[int]:
-    """Solicita entrada inteira do usuário com validação robusta."""
     while True:
         entrada = input(prompt).strip()
-        if entrada.lower() == 'sair':
-            raise KeyboardInterrupt()
-        if entrada == "" and valor_padrao is not None:
-            return valor_padrao
-
-        # Adicionado para casos onde um valor padrão não existe (edição de projeto)
+        if entrada.lower() == 'sair': raise KeyboardInterrupt()
+        if entrada == "" and valor_padrao is not None: return valor_padrao
         if entrada == "" and valor_padrao is None:
-            print(f"[!] {nome_parametro} é um campo obrigatório.")
+            print(f"[!] {nome_parametro} obrigatório.");
             continue
-
         try:
-            valor = int(entrada)
-            if minimo <= valor <= maximo:
-                return valor
-            else:
-                print(f"[!] {nome_parametro} deve estar entre {minimo} e {maximo}.")
-        except (ValueError, TypeError):
-            print(f"[!] Valor inválido. Digite um número inteiro.")
+            val = int(entrada)
+            if minimo <= val <= maximo: return val
+            print(f"[!] {nome_parametro} entre {minimo} e {maximo}.")
+        except:
+            print("[!] Digite um inteiro.")
 
 
-def _obter_float_usuario(prompt: str, valor_padrao: float, minimo: float, maximo: float, nome_parametro: str) -> float:
-    """Solicita entrada decimal (float) do usuário com validação robusta."""
+def _obter_float_usuario(prompt: str, valor_padrao: Optional[float], minimo: float, maximo: float,
+                         nome_parametro: str) -> float:
     while True:
         entrada = input(prompt).strip()
-        if entrada.lower() == 'sair':
-            raise KeyboardInterrupt()
-        if entrada == "" and valor_padrao is not None:
-            return valor_padrao
-
-        # Adicionado para casos onde um valor padrão não existe (edição de projeto)
+        if entrada.lower() == 'sair': raise KeyboardInterrupt()
+        if entrada == "" and valor_padrao is not None: return valor_padrao
         if entrada == "" and valor_padrao is None:
-            print(f"[!] {nome_parametro} é um campo obrigatório.")
+            print(f"[!] {nome_parametro} obrigatório.");
             continue
-
         try:
-            # Substitui vírgula por ponto para aceitar ambos os formatos
-            valor = float(entrada.replace(',', '.'))
-            if minimo <= valor <= maximo:
-                return valor
-            else:
-                print(f"[!] {nome_parametro} deve estar entre {minimo:.1f} e {maximo:.1f}.")
-        except (ValueError, TypeError):
-            print("[!] Valor inválido. Digite um número.")
+            val = float(entrada.replace(',', '.'))
+            if minimo <= val <= maximo: return val
+            print(f"[!] {nome_parametro} entre {minimo} e {maximo}.")
+        except:
+            print("[!] Digite um número.")
+
+
+def _obter_meses_restricao(meses: List[str]) -> Tuple[List[str], List[str]]:
+    num_meses = len(meses)
+    print("\n" + "-" * 80)
+    print("RESTRIÇÕES DE CALENDÁRIO")
+    print(f"Período do projeto: {meses[0]} a {meses[-1]} ({num_meses} meses)\n")
+    cols = 5
+    for i, mes in enumerate(meses):
+        num = i + 1
+        print(f"{num:2d}. {mes}", end="")
+        if num % cols == 0 or num == num_meses:
+            print()
+        else:
+            print("   ", end="")
+
+    def _selecionar(prompt: str) -> List[str]:
+        while True:
+            entrada = input(prompt).strip()
+            if entrada == "":
+                return []
+            try:
+                nums = [int(x.strip()) for x in entrada.split(",") if x.strip()]
+                invalidos = [n for n in nums if not (1 <= n <= num_meses)]
+                if invalidos:
+                    print(f"[!] Números fora do intervalo (1-{num_meses}): {invalidos}. Tente novamente.")
+                    continue
+                vistos: set = set()
+                resultado = []
+                for n in nums:
+                    if n not in vistos:
+                        vistos.add(n)
+                        resultado.append(meses[n - 1])
+                return resultado
+            except ValueError:
+                print("[!] Digite inteiros separados por vírgula.")
+
+    while True:
+        print("\nRecesso institucional (instrutores indisponíveis — bloqueio total)")
+        recesso = _selecionar("Informe os números separados por vírgula [Enter = nenhum]: ")
+        print("\nFérias escolares (bloqueio parcial — só afeta projetos escolares)")
+        ferias = _selecionar("Informe os números separados por vírgula [Enter = nenhum]: ")
+        print(f"\n  Recesso:          {', '.join(recesso) if recesso else '(nenhum)'}")
+        print(f"  Férias escolares: {', '.join(ferias) if ferias else '(nenhum)'}")
+        sobrepostos = [m for m in recesso if m in ferias]
+        if sobrepostos:
+            print(f"  [INFO] Meses em ambas as listas: {', '.join(sobrepostos)}")
+        confirma = input("\nConfirmar? (S/N) [S]: ").strip().upper()
+        if confirma in ("", "S"):
+            return recesso, ferias
 
 
 def exibir_resumo_parametros(params: ParametrosOtimizacao):
-    """Exibe um resumo claro e formatado dos parâmetros de otimização configurados."""
-    print("\n" + "=" * 80)
-    print("PARÂMETROS GLOBAIS CONFIGURADOS")
-    print("=" * 80)
-    print(f"  • Capacidade máxima por instrutor: {params.capacidade_max_instrutor} turmas/mês")
-    print(f"  • Spread Máximo: {params.spread_maximo} turmas")
-    print(f"  • Timeout do Solver: {params.timeout_segundos} segundos")
-    print(f"  • Meses de Férias: {', '.join(params.meses_ferias)}")
-
-    # <<< ALTERAÇÃO: Adicionando a exibição dos novos parâmetros >>>
-    print(f"  • Peso Minimização Instrutores: {params.peso_instrutores}")
-    print(f"  • Peso Spread de Carga: {params.peso_spread}")
-    print(f"  • Pico Máximo de Turmas: {params.pico_maximo_turmas}")
-
-    print("=" * 80)
+    print("\n" + "=" * 80 + "\nPARÂMETROS GLOBAIS\n" + "=" * 80)
+    print(f"  • Capacidade: {params.capacidade_max_instrutor} | Spread: {params.spread_maximo} | Timeout: {params.timeout_segundos}s")
+    print(f"  • Pesos: Instrutores={params.peso_instrutores}, Spread={params.peso_spread}, Monotonia={params.peso_monotonia}, Spread Mensal={params.peso_spread_mensal}")
+    print(f"  • Recesso institucional: {', '.join(params.meses_recesso) if params.meses_recesso else '(nenhum)'}")
+    print(f"  • Férias escolares: {', '.join(params.meses_ferias_escolares) if params.meses_ferias_escolares else '(nenhum)'}")
 
 
 def exibir_resumo_projetos(projetos: List[ConfiguracaoProjeto]):
-    """Exibe um resumo claro e formatado dos projetos configurados."""
-    print("\n" + "=" * 80)
-    print("PROJETOS CONFIGURADOS")
-    print("=" * 80)
-
-    if not projetos:
-        print("\n  Nenhum projeto configurado ainda.")
-    else:
-        total_turmas = sum(p.num_turmas for p in projetos)
-        total_prog = sum(p.num_turmas * (p.percentual_prog / 100.0) for p in projetos)
-        total_rob = sum(p.num_turmas * (p.percentual_rob / 100.0) for p in projetos)
-
-        for proj in projetos:
-            print(f"\n  {proj.nome}:")
-            print(f"    - Período: {proj.data_inicio} a {proj.data_termino}")
-            print(f"    - Turmas: {proj.num_turmas} | Duração: {proj.duracao_curso} meses | Ondas: {proj.ondas}")
-            print(f"    - Proporção: {proj.percentual_prog:.1f}% PROG / {proj.percentual_rob:.1f}% ROB")
-
-        print("\n" + "-" * 80)
-        print(f"\n  TOTAIS:")
-        print(f"    • Total de Projetos: {len(projetos)}")
-        print(f"    • Total de Turmas: {total_turmas}")
-        print(f"    • Turmas PROG: {int(total_prog)}")
-        print(f"    • Turmas ROB: {int(total_rob)}")
-
-    print("\n" + "=" * 80)
+    print("\n" + "=" * 80 + "\nPROJETOS\n" + "=" * 80)
+    if not projetos: print("  Nenhum projeto."); return
+    for p in projetos:
+        print(f"\n  {p.nome}: {p.num_turmas} turmas, {p.duracao_curso} meses, {p.data_inicio}-{p.data_termino}")
+        print(f"    Mínimo/mês: {p.turmas_min_por_mes} (exceto férias)")
+        if p.permite_ferias_escolares:
+            print(f"    Permite execução em férias escolares (oficina / espaço tecnológico)")
+    print(f"\n  TOTAL: {sum(p.num_turmas for p in projetos)} turmas.")
