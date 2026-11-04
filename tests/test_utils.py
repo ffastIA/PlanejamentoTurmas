@@ -75,7 +75,7 @@ def test_pool_margem_15pct_basico():
     """Pool = minimo + max(1, ceil(minimo * 0.15))."""
     turmas = [Turma(id=i, projeto='T', habilidade='PROG', mes_inicio=2, duracao=2)
               for i in range(12)]
-    pool = _dimensionar_pool(turmas, FERIAS_IDX, 14, 6, 'PROG')
+    pool = _dimensionar_pool(turmas, [], FERIAS_IDX, 14, 6, 'PROG')
     # Todas começam no mesmo mês (idx 2), ativas em 2 e 3 → pico = 12
     pico = 12
     minimo = math.ceil(pico / 6)  # = 2
@@ -84,7 +84,7 @@ def test_pool_margem_15pct_basico():
 
 
 def test_pool_sem_turmas():
-    assert _dimensionar_pool([], FERIAS_IDX, 14, 6, 'PROG') == 0
+    assert _dimensionar_pool([], [], FERIAS_IDX, 14, 6, 'PROG') == 0
 
 
 def test_pool_pico_distribuido():
@@ -94,7 +94,7 @@ def test_pool_pico_distribuido():
         Turma(id=1, projeto='T', habilidade='PROG', mes_inicio=3, duracao=1),
         Turma(id=2, projeto='T', habilidade='PROG', mes_inicio=4, duracao=1),
     ]
-    pool = _dimensionar_pool(turmas, FERIAS_IDX, 14, 6, 'PROG')
+    pool = _dimensionar_pool(turmas, [], FERIAS_IDX, 14, 6, 'PROG')
     # pico = 1, minimo = 1, margem = max(1, ceil(0.15)) = 1 → pool = 2
     assert pool == 2
 
@@ -103,7 +103,7 @@ def test_pool_nao_excede_margem_antiga():
     """Com 15%, pool deve ser menor ou igual ao pool com 30%."""
     turmas = [Turma(id=i, projeto='T', habilidade='PROG', mes_inicio=2, duracao=3)
               for i in range(18)]
-    pool_novo = _dimensionar_pool(turmas, FERIAS_IDX, 14, 6, 'PROG')
+    pool_novo = _dimensionar_pool(turmas, [], FERIAS_IDX, 14, 6, 'PROG')
     pico = 18
     minimo = math.ceil(pico / 6)  # = 3
     pool_antigo = minimo + max(2, math.ceil(minimo * 0.30))  # 3 + 2 = 5

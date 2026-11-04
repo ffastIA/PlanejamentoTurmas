@@ -16,7 +16,7 @@ def parametros_teste():
     return ParametrosOtimizacao(
         capacidade_max_instrutor=6,
         spread_maximo=4,
-        meses_ferias=['Jul/26', 'Dez/26'],
+        meses_ferias_escolares=['Jul/26', 'Dez/26'],
         timeout_segundos=60,
         peso_instrutores=1000,
         peso_spread=1,

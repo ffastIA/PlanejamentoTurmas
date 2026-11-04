@@ -55,7 +55,7 @@ def test_sem_concentracao_temporal(parametros_teste):
     # de spread_mes_inst incentiva carga uniforme entre os meses ativos.
     cronograma = _cronograma_uniforme(6, 2, 2)  # 6 turmas, dur 2, início a partir de Mar/26
     resultado = otimizar_atribuicao_e_carga(
-        cronograma, [], MESES_14, FERIAS_IDX, parametros_teste
+        cronograma, [], MESES_14, [], FERIAS_IDX, parametros_teste
     )
     assert resultado['status'] == 'sucesso'
     assert len(resultado['atribuicoes']) == 6
@@ -85,7 +85,7 @@ def test_spread_mensal_limitado(parametros_teste):
         for i in range(4)
     ]
     resultado = otimizar_atribuicao_e_carga(
-        cronograma, [], MESES_14, FERIAS_IDX, parametros_teste
+        cronograma, [], MESES_14, [], FERIAS_IDX, parametros_teste
     )
     assert resultado['status'] == 'sucesso'
 
@@ -108,7 +108,7 @@ def test_pool_margem_15pct(parametros_teste):
     """Pool deve ser minimo + max(1, ceil(minimo * 0.15))."""
     turmas = [Turma(id=i, projeto='T', habilidade='PROG', mes_inicio=2, duracao=2)
               for i in range(12)]
-    pool = _dimensionar_pool(turmas, FERIAS_IDX, len(MESES_14), 6, 'PROG')
+    pool = _dimensionar_pool(turmas, [], FERIAS_IDX, len(MESES_14), 6, 'PROG')
     pico = 12
     minimo = math.ceil(pico / 6)
     esperado = minimo + max(1, math.ceil(minimo * 0.15))
@@ -120,7 +120,7 @@ def test_pool_menor_que_margem_antiga(parametros_teste):
     for n_turmas in [6, 12, 18, 30]:
         turmas = [Turma(id=i, projeto='T', habilidade='PROG', mes_inicio=2, duracao=3)
                   for i in range(n_turmas)]
-        pool_novo = _dimensionar_pool(turmas, FERIAS_IDX, len(MESES_14), 6, 'PROG')
+        pool_novo = _dimensionar_pool(turmas, [], FERIAS_IDX, len(MESES_14), 6, 'PROG')
         pico = n_turmas
         minimo = math.ceil(pico / 6)
         pool_antigo = minimo + max(2, math.ceil(minimo * 0.30))
@@ -136,7 +136,7 @@ def test_pool_menor_que_margem_antiga(parametros_teste):
 def test_turmas_vazias_retorna_falha(parametros_teste):
     """Stage 2 com cronograma vazio deve retornar status 'falha'."""
     resultado = otimizar_atribuicao_e_carga(
-        [], [], MESES_14, FERIAS_IDX, parametros_teste
+        [], [], MESES_14, [], FERIAS_IDX, parametros_teste
     )
     assert resultado['status'] == 'falha', (
         "Stage 2 com turmas vazias deveria retornar 'falha', "
@@ -151,7 +151,7 @@ def test_turmas_qtd_zero_retorna_falha(parametros_teste):
          'projeto_idx': 0, 'mes_inicio': 2, 'qtd': 0, 'duracao': 2, 'habilidade': 'PROG'}
     ]
     resultado = otimizar_atribuicao_e_carga(
-        cronograma, [], MESES_14, FERIAS_IDX, parametros_teste
+        cronograma, [], MESES_14, [], FERIAS_IDX, parametros_teste
     )
     assert resultado['status'] == 'falha'
 
@@ -164,7 +164,7 @@ def test_cobertura_completa(parametros_teste):
     """Toda turma do cronograma deve receber exatamente um instrutor."""
     cronograma = _cronograma_uniforme(4, 2, 2)
     resultado = otimizar_atribuicao_e_carga(
-        cronograma, [], MESES_14, FERIAS_IDX, parametros_teste
+        cronograma, [], MESES_14, [], FERIAS_IDX, parametros_teste
     )
     assert resultado['status'] == 'sucesso'
     # Contar turmas cobertas (cada item do cronograma tem qtd=1)
@@ -177,7 +177,7 @@ def test_capacidade_mensal_respeitada(parametros_teste):
     cap = parametros_teste.capacidade_max_instrutor
     cronograma = _cronograma_uniforme(8, 1, 2)
     resultado = otimizar_atribuicao_e_carga(
-        cronograma, [], MESES_14, FERIAS_IDX, parametros_teste
+        cronograma, [], MESES_14, [], FERIAS_IDX, parametros_teste
     )
     assert resultado['status'] == 'sucesso'
     for inst_id in _instrutores_ativos(resultado):

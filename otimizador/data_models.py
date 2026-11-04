@@ -19,7 +19,7 @@ Projeto = namedtuple('Projeto', [
     'projeto_pai',     # str  — nome do projeto original (sem sufixo _OndaX)
     'onda_idx',        # int  — índice da onda (0-based) dentro do projeto pai
     'permite_ferias_escolares'  # bool — roda em férias escolares (não em recesso)
-])
+], defaults=[False])
 
 Instrutor = namedtuple('Instrutor', [
     'id', 'habilidade', 'capacidade', 'laboratorio_id'
@@ -28,7 +28,7 @@ Instrutor = namedtuple('Instrutor', [
 Turma = namedtuple('Turma', [
     'id', 'projeto', 'habilidade', 'mes_inicio', 'duracao',
     'permite_ferias_escolares'  # bool — roda em férias escolares (não em recesso)
-])
+], defaults=[False])
 
 
 # =============================================================================

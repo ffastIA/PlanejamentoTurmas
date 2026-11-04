@@ -56,7 +56,7 @@ def otimizar_atribuicao_e_carga(
                 habilidade=item['habilidade'],
                 mes_inicio=item['mes_inicio'],
                 duracao=item['duracao'],
-                permite_ferias_escolares=item['permite_ferias_escolares']
+                permite_ferias_escolares=item.get('permite_ferias_escolares', False)
             )
             turmas_objetos.append(turma)
 
