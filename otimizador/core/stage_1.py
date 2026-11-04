@@ -252,6 +252,22 @@ def otimizar_curva_demanda(
         model.Add(q >= demanda_mensal_vars[m] - demanda_mensal_vars[m + 1])
         queda[m] = q
 
+    # Penalização de subidas entre meses letivos adjacentes (simétrico a queda)
+    subida: Dict[int, cp_model.IntVar] = {}
+    for m in range(num_meses - 1):
+        if m not in demanda_mensal_vars or (m + 1) not in demanda_mensal_vars:
+            continue
+        s = model.NewIntVar(0, pico_max, f'subida_{m}')
+        model.Add(s >= demanda_mensal_vars[m + 1] - demanda_mensal_vars[m])
+        subida[m] = s
+
+    # Penalização da rampa inicial: primeiro mês monitorado vindo do zero implícito
+    subida_inicial = None
+    if meses_monitorados:
+        m0 = meses_monitorados[0]
+        subida_inicial = model.NewIntVar(0, pico_max, f'subida_ini')
+        model.Add(subida_inicial >= demanda_mensal_vars[m0])
+
     # Variação suave entre meses monitorados consecutivos
     variacao_suave: Dict[tuple, cp_model.IntVar] = {}
     pesos_variacao_suave: Dict[tuple, int] = {}
@@ -288,6 +304,14 @@ def otimizar_curva_demanda(
 
     for m, q in queda.items():
         obj_vars.append(q)
+        obj_coefs.append(peso_monotonia_int * _W)
+
+    for m, s in subida.items():
+        obj_vars.append(s)
+        obj_coefs.append(peso_monotonia_int * _W)
+
+    if subida_inicial is not None:
+        obj_vars.append(subida_inicial)
         obj_coefs.append(peso_monotonia_int * _W)
 
     if obj_vars:
