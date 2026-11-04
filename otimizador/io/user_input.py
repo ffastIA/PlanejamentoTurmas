@@ -1,12 +1,12 @@
 import sys
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 # Import relativo
 from ..data_models import ParametrosOtimizacao, ConfiguracaoProjeto, ParametrosFinanceiros, ItemCusto
 
 
-def obter_parametros_usuario() -> ParametrosOtimizacao:
+def obter_parametros_usuario(meses: Optional[List[str]] = None) -> ParametrosOtimizacao:
     """Solicita parâmetros de otimização ao usuário via CLI."""
     print("\n" + "=" * 80)
     print("CONFIGURAÇÃO DE PARÂMETROS GLOBAIS DE OTIMIZAÇÃO")
@@ -36,6 +36,12 @@ def obter_parametros_usuario() -> ParametrosOtimizacao:
             100, 0, 100000, "Peso Spread Mensal"
         )
 
+        if meses:
+            meses_recesso, meses_ferias = _obter_meses_restricao(meses)
+        else:
+            print("\n[AVISO] Período do projeto não disponível — meses de restrição não configurados.")
+            meses_recesso, meses_ferias = [], []
+
         parametros = ParametrosOtimizacao(
             capacidade_max_instrutor=capacidade_max,
             spread_maximo=spread_maximo,
@@ -45,6 +51,8 @@ def obter_parametros_usuario() -> ParametrosOtimizacao:
             pico_maximo_turmas=pico_maximo,
             peso_monotonia=peso_monotonia,
             peso_spread_mensal=peso_spread_mensal,
+            meses_recesso=meses_recesso,
+            meses_ferias_escolares=meses_ferias,
         )
         exibir_resumo_parametros(parametros)
         return parametros
@@ -333,6 +341,56 @@ def _obter_float_usuario(prompt: str, valor_padrao: Optional[float], minimo: flo
             print(f"[!] {nome_parametro} entre {minimo} e {maximo}.")
         except:
             print("[!] Digite um número.")
+
+
+def _obter_meses_restricao(meses: List[str]) -> Tuple[List[str], List[str]]:
+    num_meses = len(meses)
+    print("\n" + "-" * 80)
+    print("RESTRIÇÕES DE CALENDÁRIO")
+    print(f"Período do projeto: {meses[0]} a {meses[-1]} ({num_meses} meses)\n")
+    cols = 5
+    for i, mes in enumerate(meses):
+        num = i + 1
+        print(f"{num:2d}. {mes}", end="")
+        if num % cols == 0 or num == num_meses:
+            print()
+        else:
+            print("   ", end="")
+
+    def _selecionar(prompt: str) -> List[str]:
+        while True:
+            entrada = input(prompt).strip()
+            if entrada == "":
+                return []
+            try:
+                nums = [int(x.strip()) for x in entrada.split(",") if x.strip()]
+                invalidos = [n for n in nums if not (1 <= n <= num_meses)]
+                if invalidos:
+                    print(f"[!] Números fora do intervalo (1-{num_meses}): {invalidos}. Tente novamente.")
+                    continue
+                vistos: set = set()
+                resultado = []
+                for n in nums:
+                    if n not in vistos:
+                        vistos.add(n)
+                        resultado.append(meses[n - 1])
+                return resultado
+            except ValueError:
+                print("[!] Digite inteiros separados por vírgula.")
+
+    while True:
+        print("\nRecesso institucional (instrutores indisponíveis — bloqueio total)")
+        recesso = _selecionar("Informe os números separados por vírgula [Enter = nenhum]: ")
+        print("\nFérias escolares (bloqueio parcial — só afeta projetos escolares)")
+        ferias = _selecionar("Informe os números separados por vírgula [Enter = nenhum]: ")
+        print(f"\n  Recesso:          {', '.join(recesso) if recesso else '(nenhum)'}")
+        print(f"  Férias escolares: {', '.join(ferias) if ferias else '(nenhum)'}")
+        sobrepostos = [m for m in recesso if m in ferias]
+        if sobrepostos:
+            print(f"  [INFO] Meses em ambas as listas: {', '.join(sobrepostos)}")
+        confirma = input("\nConfirmar? (S/N) [S]: ").strip().upper()
+        if confirma in ("", "S"):
+            return recesso, ferias
 
 
 def exibir_resumo_parametros(params: ParametrosOtimizacao):

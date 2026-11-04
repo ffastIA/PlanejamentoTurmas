@@ -72,8 +72,13 @@ def main():
 
         if not (parametros and projetos_config):
             print("\n[INFO] Criando nova configuração...")
-            parametros = user_input.obter_parametros_usuario()
             projetos_config = user_input.obter_projetos_usuario()
+
+            dt_min = min(datetime.strptime(p.data_inicio, "%d/%m/%Y") for p in projetos_config)
+            dt_max = max(datetime.strptime(p.data_termino, "%d/%m/%Y") for p in projetos_config)
+            meses_periodo = gerar_lista_meses(dt_min.strftime("%d/%m/%Y"), dt_max.strftime("%d/%m/%Y"))
+
+            parametros = user_input.obter_parametros_usuario(meses=meses_periodo)
             parametros_financeiros = None
 
             # Salvar imediatamente, antes de qualquer validação ou otimização.
@@ -112,6 +117,18 @@ def main():
         print(f"[INFO] Total de meses: {len(meses)}")
         print(f"[INFO] Meses de recesso: {len(meses_recesso_idx)} ({', '.join([meses[i] for i in meses_recesso_idx])})")
         print(f"[INFO] Meses de férias escolares: {len(meses_ferias_escolares_idx)} ({', '.join([meses[i] for i in meses_ferias_escolares_idx])})")
+
+        # Alerta: meses configurados que ficam fora do período do projeto
+        ignorados_recesso = [m for m in parametros.meses_recesso if m not in meses]
+        ignorados_ferias = [m for m in parametros.meses_ferias_escolares if m not in meses]
+        if ignorados_recesso or ignorados_ferias:
+            print("\n[AVISO] Os seguintes meses de restrição estão FORA do período do projeto")
+            print("        e serão ignorados. Verifique se os anos estão corretos no JSON:")
+            if ignorados_recesso:
+                print(f"        Recesso ignorado:          {', '.join(ignorados_recesso)}")
+            if ignorados_ferias:
+                print(f"        Férias escolares ignoradas: {', '.join(ignorados_ferias)}")
+            print(f"        Período do projeto: {meses[0]} a {meses[-1]}")
 
         # ========================================================================
         # ETAPA 2.5: VALIDAÇÃO DE VIABILIDADE
