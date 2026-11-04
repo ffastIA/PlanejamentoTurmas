@@ -19,14 +19,33 @@ class DualStreamHandler(logging.StreamHandler):
     def emit(self, record):
         try:
             msg = self.format(record)
-            # Escrever no console
+        except Exception:
+            return
+
+        # Escrever no console, com fallback seguro para caracteres não
+        # suportados pelo codec do console (ex.: emojis no cp1252 do Windows).
+        # Nunca delegar para handleError/sys.stderr aqui: sys.stderr é
+        # redirecionado para este mesmo logger, o que causaria recursão infinita.
+        try:
             self.console_stream.write(msg + '\n')
             self.console_stream.flush()
-            # Escrever no arquivo
+        except UnicodeEncodeError:
+            encoding = getattr(self.console_stream, 'encoding', None) or 'utf-8'
+            safe_msg = (msg + '\n').encode(encoding, errors='replace').decode(encoding, errors='replace')
+            try:
+                self.console_stream.write(safe_msg)
+                self.console_stream.flush()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+        # Escrever no arquivo (sempre UTF-8)
+        try:
             with open(self.log_file, 'a', encoding='utf-8') as f:
                 f.write(msg + '\n')
         except Exception:
-            self.handleError(record)
+            pass
 
 
 def configurar_logging(nome_simulacao: str = None) -> str:
