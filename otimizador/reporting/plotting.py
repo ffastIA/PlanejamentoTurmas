@@ -499,6 +499,111 @@ def gerar_grafico_evolucao_instrutores(
 
 
 # =============================================================================
+# GRÁFICO: FLUXO DE INÍCIOS E ENCERRAMENTOS POR MÊS
+# =============================================================================
+
+def gerar_grafico_fluxo_inicios_encerramentos(
+    turmas: List[Turma],
+    meses: List[str],
+    meses_recesso_idx: List[int],
+    meses_ferias_escolares_idx: List[int],
+) -> Tuple[str, pd.DataFrame]:
+    """
+    Dois painéis lado a lado:
+      - Esquerdo (azul):  inícios de turmas por mês
+      - Direito (âmbar):  encerramentos de turmas por mês
+    Meses bloqueados (recesso/férias) aparecem em cinza.
+    Retorna (caminho_png, DataFrame com colunas Mes/Inicios/Encerramentos/Saldo).
+    """
+    num_meses      = len(meses)
+    inicios_arr    = np.zeros(num_meses, dtype=int)
+    enc_arr        = np.zeros(num_meses, dtype=int)
+    bloqueados_set = set(meses_recesso_idx + meses_ferias_escolares_idx)
+
+    for t in turmas:
+        bloqueados_t = calcular_meses_bloqueados(
+            t.permite_ferias_escolares,
+            meses_recesso_idx,
+            meses_ferias_escolares_idx
+        )
+        meses_at = calcular_meses_ativos(
+            t.mes_inicio, t.duracao, bloqueados_t, num_meses
+        )
+        if not meses_at:
+            continue
+        inicios_arr[meses_at[0]]  += 1
+        enc_arr[meses_at[-1]]     += 1
+
+    COR_INI  = '#0284C7'
+    COR_ENC  = '#D97706'
+    COR_BLOK = '#D1D5DB'
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 7))
+    fig.suptitle(
+        'Fluxo de Turmas: Inícios e Encerramentos por Mês',
+        fontsize=16, fontweight='bold'
+    )
+
+    y_max = max(inicios_arr.max(), enc_arr.max(), 1) + 5
+
+    for ax, dados, cor, titulo, ylabel in [
+        (ax1, inicios_arr, COR_INI, 'Inícios de Turmas',       'Turmas Iniciadas'),
+        (ax2, enc_arr,     COR_ENC, 'Encerramentos de Turmas', 'Turmas Encerradas'),
+    ]:
+        configurar_eixos(ax)
+        cores_barras = [
+            COR_BLOK if i in bloqueados_set else cor
+            for i in range(num_meses)
+        ]
+        barras = ax.bar(
+            meses, dados,
+            color=cores_barras,
+            alpha=0.9, edgecolor='white', linewidth=0.5
+        )
+        _adicionar_labels_barras_simples(ax, barras, fontsize=8)
+        ax.set_title(titulo, fontsize=13, fontweight='bold', pad=12)
+        ax.set_xlabel('Mês', fontweight='bold')
+        ax.set_ylabel(ylabel, fontweight='bold')
+        ax.set_ylim(0, y_max)
+        ax.tick_params(axis='x', rotation=45, labelsize=8)
+        ax.tick_params(axis='y', labelsize=8)
+        for tick, m in zip(ax.get_xticklabels(), meses):
+            if meses.index(m) in bloqueados_set:
+                tick.set_color('#9CA3AF')
+                tick.set_style('italic')
+
+    # Legenda compartilhada
+    from matplotlib.patches import Patch
+    legenda_elementos = [
+        Patch(facecolor=COR_INI,  label='Meses com atividade'),
+        Patch(facecolor=COR_BLOK, label='Mês bloqueado (recesso/férias)'),
+    ]
+    fig.legend(
+        handles=legenda_elementos,
+        loc='lower center',
+        ncol=2,
+        fontsize=9,
+        frameon=True,
+        facecolor='white',
+        bbox_to_anchor=(0.5, -0.04)
+    )
+
+    plt.tight_layout()
+
+    path = "resultados_otimizacao/grafico_fluxo_inicios_encerramentos.png"
+    plt.savefig(path, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    df = pd.DataFrame({
+        'Mes':           meses,
+        'Inicios':       inicios_arr,
+        'Encerramentos': enc_arr,
+        'Saldo':         inicios_arr - enc_arr,
+    })
+    return path, df
+
+
+# =============================================================================
 # GRÁFICO: FLUXO DE CAIXA
 # =============================================================================
 

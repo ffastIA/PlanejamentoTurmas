@@ -370,6 +370,20 @@ def main():
         except Exception as e:
             print(f"      ⚠ Erro gráfico conclusões: {e}")
 
+        # Gráfico de fluxo de inícios e encerramentos
+        df_fluxo_turmas = pd.DataFrame()
+        try:
+            graficos['fluxo_inicios_encerramentos'], df_fluxo_turmas = \
+                plotting.gerar_grafico_fluxo_inicios_encerramentos(
+                    resultados_estagio2['turmas'],
+                    meses,
+                    meses_recesso_idx,
+                    meses_ferias_escolares_idx
+                )
+            print("      ✓ Gráfico Fluxo de Inícios e Encerramentos")
+        except Exception as e:
+            print(f"      ⚠ Erro gráfico fluxo inícios/encerramentos: {e}")
+
         # Gráfico de evolução de instrutores
         df_evolucao_instrutores = pd.DataFrame()
         try:
@@ -446,7 +460,8 @@ def main():
                 distribuicao_por_projeto,
                 parametros.pico_maximo_turmas,
                 parametros_financeiros,
-                df_evolucao_instrutores
+                df_evolucao_instrutores,
+                df_fluxo_turmas
             )
             print("      ✓ Relatório PDF gerado com sucesso")
         except Exception as e:

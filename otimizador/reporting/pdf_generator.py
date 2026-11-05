@@ -160,7 +160,8 @@ def gerar_relatorio_pdf(
     distribuicao_por_projeto: Dict,
     pico_maximo_limite: int,
     parametros_financeiros: ParametrosFinanceiros = None,
-    df_evolucao_instrutores: pd.DataFrame = None
+    df_evolucao_instrutores: pd.DataFrame = None,
+    df_fluxo_turmas: pd.DataFrame = None
 ):
     """
     Gera relatório PDF completo de otimização.
@@ -323,6 +324,44 @@ def gerar_relatorio_pdf(
             0, 1
         )
         pdf.add_image_centered(graficos_paths['prog_rob'], width=180)
+
+    # 3.4 — Fluxo de Inícios e Encerramentos
+    if graficos_paths.get('fluxo_inicios_encerramentos'):
+        pdf.add_page()
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(
+            0, 8,
+            "3.4. Fluxo de Inicios e Encerramentos por Mes",
+            0, 1
+        )
+        pdf.set_font('Arial', '', 9)
+        pdf.multi_cell(
+            0, 5,
+            "Visualizacao do volume de turmas iniciando e encerrando "
+            "suas atividades em cada mes do periodo. Meses bloqueados "
+            "(recesso e ferias escolares) aparecem em cinza."
+        )
+        pdf.ln(2)
+        pdf.add_image_centered(
+            graficos_paths['fluxo_inicios_encerramentos'], width=190
+        )
+
+        if df_fluxo_turmas is not None and not df_fluxo_turmas.empty:
+            pdf.ln(4)
+            pdf.set_font('Arial', 'B', 10)
+            pdf.cell(0, 8, "Tabela de Inicios e Encerramentos por Mes", 0, 1)
+            header = ['Mes', 'Inicios', 'Encerramentos', 'Saldo']
+            widths = [40, 40, 50, 30]
+            data = []
+            for _, row in df_fluxo_turmas.iterrows():
+                saldo = int(row['Saldo'])
+                data.append([
+                    row['Mes'],
+                    int(row['Inicios']),
+                    int(row['Encerramentos']),
+                    f"+{saldo}" if saldo > 0 else str(saldo)
+                ])
+            pdf.create_table(header, data, widths)
 
     if not serie_temporal_df.empty:
         pdf.ln(5)
