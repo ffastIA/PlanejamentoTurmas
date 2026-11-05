@@ -17,9 +17,52 @@ from ortools.sat.python import cp_model
 from typing import List, Dict, Any, Tuple, Optional
 from collections import defaultdict
 import math
+import threading
+import time
 
 from ..data_models import Projeto, Turma, Instrutor, ParametrosOtimizacao
 from ..utils import calcular_meses_ativos, calcular_meses_bloqueados
+
+
+class _ProgressDots:
+    """Imprime uma linha de progresso a cada `interval` segundos enquanto o solver roda."""
+
+    def __init__(self, label: str, interval: float = 10.0):
+        self._label = label
+        self._interval = interval
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._start_time = time.time()
+
+    def _run(self):
+        while not self._stop.wait(self._interval):
+            elapsed = time.time() - self._start_time
+            print(f"    [{self._label}] calculando... {elapsed:.0f}s", flush=True)
+
+    def start(self):
+        self._thread.start()
+        return self
+
+    def stop(self):
+        self._stop.set()
+        self._thread.join(timeout=1)
+
+
+class _SolucaoCallback(cp_model.CpSolverSolutionCallback):
+    """Exibe cada solução melhor encontrada pelo solver."""
+
+    def __init__(self, label: str):
+        super().__init__()
+        self._label = label
+        self._count = 0
+
+    def on_solution_callback(self):
+        self._count += 1
+        print(
+            f"    [{self._label}] solução #{self._count}: "
+            f"obj={self.ObjectiveValue():.0f} | {self.WallTime():.1f}s",
+            flush=True,
+        )
 
 
 def otimizar_atribuicao_e_carga(
@@ -374,7 +417,10 @@ def _resolver_subproblema(
     solver_p1.parameters.log_search_progress = False
 
     print(f"  [{habilidade}] Fase 1: minimizando instrutores (timeout={timeout_p1}s)...")
-    status_p1 = solver_p1.Solve(model)
+    cb_p1 = _SolucaoCallback(f"{habilidade}/F1")
+    dots_p1 = _ProgressDots(f"{habilidade}/F1", interval=10.0).start()
+    status_p1 = solver_p1.SolveWithSolutionCallback(model, cb_p1)
+    dots_p1.stop()
 
     if status_p1 not in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
         print(f"  [{habilidade}] Fase 1 falhou (status={status_p1})")
@@ -409,7 +455,10 @@ def _resolver_subproblema(
     solver_p2.parameters.log_search_progress = False
 
     print(f"  [{habilidade}] Fase 2: otimizando spread/equipe (timeout={timeout_p2}s)...")
-    status_p2 = solver_p2.Solve(model)
+    cb_p2 = _SolucaoCallback(f"{habilidade}/F2")
+    dots_p2 = _ProgressDots(f"{habilidade}/F2", interval=10.0).start()
+    status_p2 = solver_p2.SolveWithSolutionCallback(model, cb_p2)
+    dots_p2.stop()
 
     if status_p2 in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
         final_solver = solver_p2
