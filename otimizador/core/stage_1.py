@@ -296,11 +296,24 @@ def otimizar_curva_demanda(
             peso_variacao * 2 if cruza_ferias else peso_variacao * _W
         )
 
+    # Pico de demanda — minimizado diretamente para reduzir pool de instrutores.
+    # O número de instrutores necessários = ceil(pico / capacidade_max), portanto
+    # minimizar o pico é equivalente a minimizar instrutores.
+    pico_var = model.NewIntVar(0, pico_max, 'pico_demanda')
+    for dv in demanda_mensal_vars.values():
+        model.Add(pico_var >= dv)
+
     # -------------------------------------------------------------------------
     # Função objetivo
     # -------------------------------------------------------------------------
+    peso_pico_int = max(1, int(parametros.peso_instrutores))
+
     obj_vars: List[cp_model.IntVar] = []
     obj_coefs: List[int] = []
+
+    # Pico de demanda (maior contribuição para o custo de instrutores)
+    obj_vars.append(pico_var)
+    obj_coefs.append(peso_pico_int * _W)
 
     for m, dev in desvio_alvo.items():
         obj_vars.append(dev)
