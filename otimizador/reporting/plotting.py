@@ -240,41 +240,48 @@ def gerar_grafico_turmas_instrutor_tipologia_projeto(
 # =============================================================================
 
 def gerar_grafico_carga_por_instrutor(atribuicoes: List[Dict]) -> str:
-    cargas = {}
-    for atr in atribuicoes:
-        cargas[atr['instrutor'].id] = (
-            cargas.get(atr['instrutor'].id, 0) + 1
-        )
+    COR_PROG = '#0284C7'
+    COR_ROB  = '#D97706'
 
-    vals = list(cargas.values())
-    fig, ax = plt.subplots(figsize=(12, 7))
+    # Acumula carga e habilidade por instrutor
+    cargas: Dict[str, int] = {}
+    hab_map: Dict[str, str] = {}
+    for atr in atribuicoes:
+        inst = atr['instrutor']
+        cargas[inst.id] = cargas.get(inst.id, 0) + 1
+        hab_map[inst.id] = inst.habilidade
+
+    # Ordena: PROG primeiro, depois ROB; dentro de cada grupo por ID
+    ids_ordenados = sorted(
+        cargas.keys(),
+        key=lambda iid: (0 if hab_map[iid] == 'PROG' else 1, iid)
+    )
+    vals   = [cargas[iid] for iid in ids_ordenados]
+    cores  = [COR_PROG if hab_map[iid] == 'PROG' else COR_ROB for iid in ids_ordenados]
+
+    altura = max(4, len(ids_ordenados) * 0.5)
+    fig, ax = plt.subplots(figsize=(10, altura))
     configurar_eixos(ax)
 
-    n, bins, patches = ax.hist(
-        vals,
-        bins=range(min(vals), max(vals) + 2),
-        align='left', rwidth=0.8, edgecolor='white'
-    )
-    for idx, patch in enumerate(patches):
-        patch.set_facecolor(obter_cor(idx))
+    barras = ax.barh(ids_ordenados, vals, color=cores, edgecolor='white', height=0.7)
 
-    for count, patch in zip(n, patches):
-        if count > 0:
-            ax.text(
-                patch.get_x() + patch.get_width() / 2,
-                count + 0.1,
-                str(int(count)),
-                ha='center', va='bottom',
-                fontsize=8, fontweight='bold',
-                color='#333333'
-            )
+    for bar, v in zip(barras, vals):
+        ax.text(
+            v + 0.15, bar.get_y() + bar.get_height() / 2,
+            str(int(v)),
+            va='center', ha='left', fontsize=8, fontweight='bold', color='#333333'
+        )
 
-    ax.set_title(
-        'Distribuição de Carga',
-        fontsize=16, fontweight='bold'
-    )
+    from matplotlib.patches import Patch
+    legenda = [
+        Patch(facecolor=COR_PROG, label='Programação (PROG)'),
+        Patch(facecolor=COR_ROB,  label='Robótica (ROB)'),
+    ]
+    ax.legend(handles=legenda, loc='lower right', fontsize=9)
+
+    ax.set_title('Carga por Instrutor', fontsize=14, fontweight='bold')
     ax.set_xlabel('Total de Turmas', fontweight='bold')
-    ax.set_ylabel('Quantidade de Instrutores', fontweight='bold')
+    ax.invert_yaxis()
 
     path = "resultados_otimizacao/grafico_carga_instrutores.png"
     plt.savefig(path, dpi=300, bbox_inches='tight')
