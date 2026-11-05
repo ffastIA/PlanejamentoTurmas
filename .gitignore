@@ -4,3 +4,8 @@
 *.pdf
 *.png
 resultados_otimizacao/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
