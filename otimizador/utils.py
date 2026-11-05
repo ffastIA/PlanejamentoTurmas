@@ -86,6 +86,21 @@ def calcular_meses_ativos(
     return meses_ativos
 
 
+def turma_cruza_bloqueio(
+    mes_inicio: int,
+    duracao: int,
+    blocked_idx: list
+) -> bool:
+    """
+    Retorna True se qualquer mês do intervalo
+    [mes_inicio, mes_inicio+duracao-1] for bloqueado.
+
+    Uma turma cujo intervalo cruza um mês bloqueado precisaria
+    pausar e retomar — o que é proibido pela nova restrição.
+    """
+    return any((mes_inicio + k) in blocked_idx for k in range(duracao))
+
+
 def calcular_meses_bloqueados(
     permite_ferias_escolares: bool,
     meses_recesso_idx: list,
@@ -124,7 +139,8 @@ def calcular_janela_inicio(
             m_inicio, duracao, meses_ferias, num_meses
         )
         if (len(meses_ativos) == duracao
-                and max(meses_ativos) <= mes_fim_projeto):
+                and max(meses_ativos) <= mes_fim_projeto
+                and not turma_cruza_bloqueio(m_inicio, duracao, meses_ferias)):
             if inicio_min == -1:
                 inicio_min = m_inicio
             inicio_max = m_inicio
@@ -195,7 +211,8 @@ def _calcular_inicio_max_onda(
                 candidato, duracao_curso, meses_ferias, num_meses
             )
             if (len(ma) == duracao_curso
-                    and ma[-1] <= mes_termino_projeto):
+                    and ma[-1] <= mes_termino_projeto
+                    and not turma_cruza_bloqueio(candidato, duracao_curso, meses_ferias)):
                 inicio_max = candidato
         return max(inicio_min_onda, inicio_max if inicio_max != -1
                    else inicio_min_onda)
@@ -241,7 +258,8 @@ def _calcular_inicio_max_onda(
             candidato, duracao_curso, meses_ferias, num_meses
         )
         if (len(ma) == duracao_curso
-                and ma[-1] <= limite_superior):
+                and ma[-1] <= limite_superior
+                and not turma_cruza_bloqueio(candidato, duracao_curso, meses_ferias)):
             inicio_max = candidato
 
     if inicio_max == -1:

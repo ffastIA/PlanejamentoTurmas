@@ -1,6 +1,6 @@
 import math
 import pytest
-from otimizador.utils import calcular_meses_ativos, calcular_janela_inicio
+from otimizador.utils import calcular_meses_ativos, calcular_janela_inicio, turma_cruza_bloqueio
 from otimizador.data_models import Turma
 from otimizador.core.stage_2 import _dimensionar_pool
 
@@ -51,14 +51,52 @@ def test_meses_ativos_sem_meses_suficientes():
 
 
 # =============================================================================
+# turma_cruza_bloqueio
+# =============================================================================
+
+def test_turma_cruza_bloqueio_sem_bloqueio():
+    # meses 2,3,4 — nenhum bloqueado
+    assert not turma_cruza_bloqueio(2, 3, [6, 11])
+
+
+def test_turma_cruza_bloqueio_no_meio():
+    # meses 5,6,7 — 6 é bloqueado
+    assert turma_cruza_bloqueio(5, 3, [6, 11])
+
+
+def test_turma_cruza_bloqueio_no_inicio():
+    # meses 6,7,8 — 6 é bloqueado
+    assert turma_cruza_bloqueio(6, 3, [6, 11])
+
+
+def test_turma_cruza_bloqueio_no_fim():
+    # meses 9,10,11 — 11 é bloqueado
+    assert turma_cruza_bloqueio(9, 3, [11])
+
+
+def test_turma_cruza_bloqueio_exatamente_antes():
+    # meses 8,9 — nenhum bloqueado (11 fica fora)
+    assert not turma_cruza_bloqueio(8, 2, [11])
+
+
+def test_turma_cruza_bloqueio_sem_lista():
+    # nenhum bloqueio configurado
+    assert not turma_cruza_bloqueio(5, 3, [])
+
+
+# =============================================================================
 # calcular_janela_inicio
 # =============================================================================
 
 def test_janela_inicio_basica():
-    # Projeto Mar/26–Out/26 (idx 2–9), duração 2, sem férias no período
+    # Projeto Mar/26–Out/26 (idx 2–9), duração 2, férias Jul/26 (6) e Dez/26 (11)
     ini, fim = calcular_janela_inicio(2, 9, 2, [6, 11], 14, MESES_14)
     assert ini <= fim
     assert ini >= 2
+    # start 5 (Jun/26): janela [5,6] cruza bloqueio 6 → não deve ser inicio_max
+    assert fim != 5
+    # start 6 (Jul/26): primeiro mês já bloqueado → também excluído
+    assert fim != 6
 
 
 def test_janela_inicio_invalida_levanta_excecao():

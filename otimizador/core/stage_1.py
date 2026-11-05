@@ -4,7 +4,7 @@
 from ortools.sat.python import cp_model
 from typing import List, Dict, Any
 from ..data_models import Projeto, ParametrosOtimizacao
-from ..utils import calcular_meses_ativos, calcular_meses_bloqueados
+from ..utils import calcular_meses_ativos, calcular_meses_bloqueados, turma_cruza_bloqueio
 
 # Fator para converter peso 0.2 (cruzamento de férias) em inteiro:
 # peso_variacao * _W  →  normal
@@ -83,13 +83,21 @@ def otimizar_curva_demanda(
     y = {}
     for i, proj in enumerate(projetos):
         total_onda = proj.prog + proj.rob
+        bloqueados_proj_j = calcular_meses_bloqueados(
+            proj.permite_ferias_escolares, meses_recesso_idx, meses_ferias_escolares_idx
+        )
         for j in range(num_meses):
             x[i, j] = model.NewIntVar(0, total_onda, f'x_{i}_{j}')
             y[i, j] = model.NewBoolVar(f'y_{i}_{j}')
 
             if proj.inicio_min <= j <= proj.inicio_max:
-                model.Add(x[i, j] <= total_onda * y[i, j])
-                model.Add(x[i, j] >= y[i, j])
+                if turma_cruza_bloqueio(j, proj.duracao, bloqueados_proj_j):
+                    # start inválido: a turma pausaria sobre um mês bloqueado
+                    model.Add(x[i, j] == 0)
+                    model.Add(y[i, j] == 0)
+                else:
+                    model.Add(x[i, j] <= total_onda * y[i, j])
+                    model.Add(x[i, j] >= y[i, j])
             else:
                 model.Add(x[i, j] == 0)
                 model.Add(y[i, j] == 0)
