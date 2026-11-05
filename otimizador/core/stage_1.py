@@ -98,6 +98,8 @@ def otimizar_curva_demanda(
                 else:
                     model.Add(x[i, j] <= total_onda * y[i, j])
                     model.Add(x[i, j] >= y[i, j])
+                    if proj.turmas_min_por_mes > 0:
+                        model.Add(x[i, j] >= proj.turmas_min_por_mes)
             else:
                 model.Add(x[i, j] == 0)
                 model.Add(y[i, j] == 0)
