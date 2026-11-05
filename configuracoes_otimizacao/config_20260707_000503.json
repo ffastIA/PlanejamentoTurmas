@@ -1,0 +1,51 @@
+{
+  "metadata": {
+    "nome": "config_20260707_000503",
+    "data_criacao": "2026-07-07T00:05:13.640095",
+    "versao": "3.1"
+  },
+  "parametros": {
+    "capacidade_max_instrutor": 6,
+    "spread_maximo": 4,
+    "meses_ferias": [
+      "Jul/26",
+      "Dez/26"
+    ],
+    "timeout_segundos": 180,
+    "peso_instrutores": 10000,
+    "peso_spread": 1,
+    "pico_maximo_turmas": 100,
+    "peso_monotonia": 500,
+    "peso_spread_mensal": 100
+  },
+  "projetos": [
+    {
+      "nome": "DD_M12",
+      "data_inicio": "15/08/2026",
+      "data_termino": "30/04/2027",
+      "num_turmas": 51,
+      "duracao_curso": 4,
+      "ondas": 1,
+      "percentual_prog": 60.0,
+      "turmas_min_por_mes": 1,
+      "mes_inicio_idx": 0,
+      "mes_termino_idx": 8
+    },
+    {
+      "nome": "DD_M15",
+      "data_inicio": "15/08/2026",
+      "data_termino": "30/04/2027",
+      "num_turmas": 34,
+      "duracao_curso": 4,
+      "ondas": 1,
+      "percentual_prog": 60.0,
+      "turmas_min_por_mes": 1,
+      "mes_inicio_idx": 0,
+      "mes_termino_idx": 8
+    }
+  ],
+  "financeiro": {
+    "itens_custo": [],
+    "moeda": "BRL"
+  }
+}

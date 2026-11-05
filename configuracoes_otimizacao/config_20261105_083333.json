@@ -1,0 +1,43 @@
+{
+  "metadata": {
+    "nome": "config_20261105_083333",
+    "data_criacao": "2026-11-05T08:40:43.249639",
+    "versao": "3.1"
+  },
+  "parametros": {
+    "capacidade_max_instrutor": 6,
+    "spread_maximo": 2,
+    "meses_recesso": [
+      "Dez/27"
+    ],
+    "meses_ferias_escolares": [
+      "Jul/27",
+      "Jan/28"
+    ],
+    "timeout_segundos": 180,
+    "peso_instrutores": 50000,
+    "peso_spread": 1,
+    "pico_maximo_turmas": 200,
+    "peso_monotonia": 5000,
+    "peso_spread_mensal": 100
+  },
+  "projetos": [
+    {
+      "nome": "IdearTec",
+      "data_inicio": "01/02/2027",
+      "data_termino": "30/06/2028",
+      "num_turmas": 180,
+      "duracao_curso": 3,
+      "ondas": 1,
+      "percentual_prog": 70.0,
+      "turmas_min_por_mes": 12,
+      "permite_ferias_escolares": false,
+      "mes_inicio_idx": 0,
+      "mes_termino_idx": 16
+    }
+  ],
+  "financeiro": {
+    "itens_custo": [],
+    "moeda": "BRL"
+  }
+}

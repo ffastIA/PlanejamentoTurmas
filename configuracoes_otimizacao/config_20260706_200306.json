@@ -1,0 +1,39 @@
+{
+  "metadata": {
+    "nome": "config_20260706_200306",
+    "data_criacao": "2026-07-06T20:03:14.480804",
+    "versao": "3.1"
+  },
+  "parametros": {
+    "capacidade_max_instrutor": 6,
+    "spread_maximo": 2,
+    "meses_ferias": [
+      "Jul/26",
+      "Dez/26"
+    ],
+    "timeout_segundos": 180,
+    "peso_instrutores": 10000,
+    "peso_spread": 1,
+    "pico_maximo_turmas": 250,
+    "peso_monotonia": 500,
+    "peso_spread_mensal": 100
+  },
+  "projetos": [
+    {
+      "nome": "DD_SOF",
+      "data_inicio": "15/08/2026",
+      "data_termino": "30/04/2027",
+      "num_turmas": 75,
+      "duracao_curso": 4,
+      "ondas": 1,
+      "percentual_prog": 60.0,
+      "turmas_min_por_mes": 1,
+      "mes_inicio_idx": 0,
+      "mes_termino_idx": 8
+    }
+  ],
+  "financeiro": {
+    "itens_custo": [],
+    "moeda": "BRL"
+  }
+}
