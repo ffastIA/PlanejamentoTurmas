@@ -419,7 +419,7 @@ def _resolver_subproblema(
     print(f"  [{habilidade}] Fase 1: minimizando instrutores (timeout={timeout_p1}s)...")
     cb_p1 = _SolucaoCallback(f"{habilidade}/F1")
     dots_p1 = _ProgressDots(f"{habilidade}/F1", interval=10.0).start()
-    status_p1 = solver_p1.SolveWithSolutionCallback(model, cb_p1)
+    status_p1 = solver_p1.Solve(model, cb_p1)
     dots_p1.stop()
 
     if status_p1 not in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
@@ -457,7 +457,7 @@ def _resolver_subproblema(
     print(f"  [{habilidade}] Fase 2: otimizando spread/equipe (timeout={timeout_p2}s)...")
     cb_p2 = _SolucaoCallback(f"{habilidade}/F2")
     dots_p2 = _ProgressDots(f"{habilidade}/F2", interval=10.0).start()
-    status_p2 = solver_p2.SolveWithSolutionCallback(model, cb_p2)
+    status_p2 = solver_p2.Solve(model, cb_p2)
     dots_p2.stop()
 
     if status_p2 in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
