@@ -9,3 +9,5 @@ resultados_otimizacao/
 __pycache__/
 *.pyc
 *.pyo
+.claude/
+.idea/
