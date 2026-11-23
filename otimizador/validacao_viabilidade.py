@@ -5,7 +5,7 @@ Detecta conflitos de restrições antes de chamar o solver
 
 from typing import List, Tuple
 from .data_models import ConfiguracaoProjeto, ParametrosOtimizacao
-from .utils import gerar_lista_meses, data_para_indice_mes
+from .utils import gerar_lista_meses, data_para_indice_mes, _ultimo_mes_inicio_valido
 
 
 def validar_viabilidade_configuracao(projetos_config: List[ConfiguracaoProjeto],
@@ -29,21 +29,27 @@ def validar_viabilidade_configuracao(projetos_config: List[ConfiguracaoProjeto],
         # Converter datas para índices
         try:
             mes_inicio_idx = data_para_indice_mes(proj.data_inicio, meses)
-            mes_fim_idx = data_para_indice_mes(proj.data_termino, meses)
+            mes_fim_calend_idx = data_para_indice_mes(proj.data_termino, meses)
         except:
             avisos.append(f"❌ {proj.nome}: Datas inválidas ou fora do período")
             continue
 
-        duracao_meses_calendario = mes_fim_idx - mes_inicio_idx + 1
+        # Último mês onde um curso pode INICIAR e terminar dentro da data real
+        try:
+            mes_fim_inicio_idx = _ultimo_mes_inicio_valido(
+                proj.data_termino, proj.duracao_curso, meses
+            )
+        except ValueError:
+            mes_fim_inicio_idx = mes_inicio_idx - 1  # nenhum mês válido
 
-        # Calcular meses bloqueados no período: recesso sempre conta;
-        # férias escolares só contam contra o projeto se ele não tiver a
-        # tag de isenção (permite_ferias_escolares).
+        duracao_meses_calendario = mes_fim_calend_idx - mes_inicio_idx + 1
+
+        # Calcular meses bloqueados no período completo (para exibição)
         meses_recesso_no_periodo = sum(1 for m in parametros.meses_recesso
-                                       if m in meses[mes_inicio_idx:mes_fim_idx + 1])
+                                       if m in meses[mes_inicio_idx:mes_fim_calend_idx + 1])
         meses_ferias_escolares_no_periodo = 0 if proj.permite_ferias_escolares else sum(
             1 for m in parametros.meses_ferias_escolares
-            if m in meses[mes_inicio_idx:mes_fim_idx + 1]
+            if m in meses[mes_inicio_idx:mes_fim_calend_idx + 1]
             and m not in parametros.meses_recesso
         )
         meses_ferias_no_periodo = meses_recesso_no_periodo + meses_ferias_escolares_no_periodo
@@ -66,13 +72,23 @@ def validar_viabilidade_configuracao(projetos_config: List[ConfiguracaoProjeto],
                 f"maior que período disponível ({duracao_meses_letivos} meses letivos)"
             )
 
-        # --- VALIDAÇÃO 2: Janela de início por onda ---
-        meses_disponiveis_para_inicio = duracao_meses_letivos - proj.duracao_curso + 1
+        # --- VALIDAÇÃO 2: Janela de início por onda (dia-consciente) ---
+        if mes_fim_inicio_idx < mes_inicio_idx:
+            meses_disponiveis_para_inicio = 0
+        else:
+            janela = meses[mes_inicio_idx:mes_fim_inicio_idx + 1]
+            recesso_janela = sum(1 for m in parametros.meses_recesso if m in janela)
+            ferias_janela = 0 if proj.permite_ferias_escolares else sum(
+                1 for m in parametros.meses_ferias_escolares
+                if m in janela and m not in parametros.meses_recesso
+            )
+            meses_disponiveis_para_inicio = len(janela) - recesso_janela - ferias_janela
 
         if meses_disponiveis_para_inicio <= 0:
             avisos.append(
-                f"❌ {proj.nome}: Sem janela de início viável. "
-                f"Período ({duracao_meses_letivos}) < Duração ({proj.duracao_curso})"
+                f"❌ {proj.nome}: Sem janela de início válida. "
+                f"Nenhum mês permite início de curso de {proj.duracao_curso} mês(es) "
+                f"com encerramento até {proj.data_termino}"
             )
             continue
 
@@ -92,7 +108,7 @@ def validar_viabilidade_configuracao(projetos_config: List[ConfiguracaoProjeto],
 
         # --- VALIDAÇÃO 4: Mínimo de turmas por mês ---
         turmas_por_onda = proj.num_turmas / proj.ondas
-        min_turmas_total = proj.turmas_min_por_mes * duracao_meses_letivos
+        min_turmas_total = proj.turmas_min_por_mes * meses_disponiveis_para_inicio
 
         print(f"  Turmas por onda: {turmas_por_onda:.1f}")
         print(f"  Mínimo total exigido: {min_turmas_total} turmas")
