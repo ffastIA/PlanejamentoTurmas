@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import List, Tuple, Dict, Any, Optional
 from collections import defaultdict
 import pandas as pd
@@ -292,6 +292,48 @@ def _avancar_inicio_min_pos_onda(
 
 
 # =============================================================================
+# HELPERS PARA JANELA DE INÍCIO DIA-CONSCIENTE
+# =============================================================================
+
+def _adicionar_meses(d: date, n: int) -> date:
+    """Soma n meses calendário a d, retornando o 1º dia do mês resultado."""
+    m = d.month - 1 + n
+    return date(d.year + m // 12, m % 12 + 1, 1)
+
+
+def _ultimo_mes_inicio_valido(
+    data_termino_str: str,
+    duracao_meses: int,
+    meses: List[str]
+) -> int:
+    """
+    Retorna o índice (em `meses`) do último mês M tal que um curso
+    iniciado em 01/M com `duracao_meses` meses termina em data
+    <= data_termino_str.
+
+    Percorre `meses` de trás para frente; levanta ValueError quando
+    nenhum mês é válido.
+    """
+    meses_nomes = [
+        'Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun',
+        'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'
+    ]
+    data_termino = datetime.strptime(data_termino_str, "%d/%m/%Y").date()
+    for idx in range(len(meses) - 1, -1, -1):
+        nome, ano2 = meses[idx].split('/')
+        mes_num = meses_nomes.index(nome) + 1
+        ano_num = 2000 + int(ano2)
+        data_inicio_m = date(ano_num, mes_num, 1)
+        data_fim_curso = _adicionar_meses(data_inicio_m, duracao_meses)
+        if data_fim_curso <= data_termino + timedelta(days=1):
+            return idx
+    raise ValueError(
+        f"Nenhum mês em {meses} permite início de curso de "
+        f"{duracao_meses} mês(es) com término até {data_termino_str}."
+    )
+
+
+# =============================================================================
 # CONVERSÃO DE PROJETOS — JANELAS ESCALONADAS (inalterada exceto dependência)
 # =============================================================================
 
@@ -328,8 +370,8 @@ def converter_projetos_para_modelo(
         config.mes_inicio_idx  = data_para_indice_mes(
             config.data_inicio, meses
         )
-        config.mes_termino_idx = data_para_indice_mes(
-            config.data_termino, meses
+        config.mes_termino_idx = _ultimo_mes_inicio_valido(
+            config.data_termino, config.duracao_curso, meses
         )
 
         bloqueados = calcular_meses_bloqueados(

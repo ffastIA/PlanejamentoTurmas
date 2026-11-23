@@ -1,6 +1,9 @@
 import math
 import pytest
-from otimizador.utils import calcular_meses_ativos, calcular_janela_inicio, turma_cruza_bloqueio
+from otimizador.utils import (
+    calcular_meses_ativos, calcular_janela_inicio, turma_cruza_bloqueio,
+    _ultimo_mes_inicio_valido,
+)
 from otimizador.data_models import Turma
 from otimizador.core.stage_2 import _dimensionar_pool
 
@@ -146,3 +149,34 @@ def test_pool_nao_excede_margem_antiga():
     minimo = math.ceil(pico / 6)  # = 3
     pool_antigo = minimo + max(2, math.ceil(minimo * 0.30))  # 3 + 2 = 5
     assert pool_novo <= pool_antigo
+
+
+# =============================================================================
+# _ultimo_mes_inicio_valido
+# =============================================================================
+
+MESES_JAN_FEV_27 = ['Jan/27', 'Fev/27']
+MESES_JAN_JUN_27 = ['Jan/27', 'Fev/27', 'Mar/27', 'Abr/27', 'Mai/27', 'Jun/27']
+
+
+def test_ultimo_mes_inicio_valido_periodo_30_dias():
+    # Período 11/01/2027–10/02/2027, duração 1 mês.
+    # Feb/27: 01/02 + 1 mês = 01/03 > 10/02 → inválido.
+    # Jan/27: 01/01 + 1 mês = 01/02 ≤ 10/02 → válido (índice 0).
+    idx = _ultimo_mes_inicio_valido("10/02/2027", 1, MESES_JAN_FEV_27)
+    assert idx == 0  # Jan/27
+
+
+def test_ultimo_mes_inicio_valido_termino_fim_mes():
+    # data_termino = último dia do mês → o próprio mês deve ser válido.
+    # Jan/27: 01/01 + 1 mês = 01/02; 01/02 ≤ 31/01 + 1 dia → válido.
+    idx = _ultimo_mes_inicio_valido("31/01/2027", 1, MESES_JAN_FEV_27)
+    assert idx == 0  # Jan/27
+
+
+def test_ultimo_mes_inicio_valido_3_meses():
+    # data_termino = 15/06/2027, duração 3.
+    # Abr/27: 01/04 + 3 meses = 01/07 > 15/06 → inválido.
+    # Mar/27: 01/03 + 3 meses = 01/06 ≤ 15/06 → válido (índice 2).
+    idx = _ultimo_mes_inicio_valido("15/06/2027", 3, MESES_JAN_JUN_27)
+    assert idx == 2  # Mar/27
